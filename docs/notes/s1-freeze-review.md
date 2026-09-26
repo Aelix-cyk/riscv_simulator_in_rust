@@ -30,7 +30,8 @@ One scope consequence is flagged for the architect in §3.
 
 Also worth adding to §8, since it is a trap detail the implementer will otherwise guess:
 `ebreak` sets `tval = epc` (measured `0x800001a4`), unlike `illegal_instruction`, whose `tval` is
-the encoding.
+the encoding. **Declined by the architect on 2026-09-26 — deliberately left unapplied; do not
+re-raise it as a defect.** The fact stays verifiable from `rv64mi-p-sbreak`.
 
 ## 3. Scope consequence for the architect
 
