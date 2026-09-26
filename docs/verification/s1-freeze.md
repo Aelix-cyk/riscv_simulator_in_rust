@@ -2,7 +2,7 @@
 
 **Status:** frozen (architect approved 2026-09-26; ADR 001, ADR 006)
 **Owner:** verifier · **Date:** 2026-09-26 · **Confidence:** high on the line inventory and
-normalization (measured), medium on the rendering decision in §9 F2
+normalization (measured), and high on both §9 decisions now that they are taken
 
 Everything below is derived from running the pinned oracle over the whole S1 corpus on
 2026-09-26: 71/71 binaries exit 0, producing 836,465 log lines. Counts quoted here are measured,
@@ -92,12 +92,14 @@ architect's sign-off.
 4. **Token rewriting:** Spike's privilege field `<priv>` → `p<priv>`; its CSR annotation
    `c<num>_<name> 0x<value>` → `csr<num>_<name>=0x<value>`; its load annotation `mem 0x<addr>` and
    store annotation `mem 0x<addr> 0x<value>` → the `mem` forms in §4.
-5. **Truncate the reference** immediately after the first commit that stores a nonzero value to
-   `tohost`. Spike notices the halt only on its next device poll, so it keeps running the
-   `write_tohost` loop — measured in `rv64ui-p-add`: 1000 stores to `0x80001000` and 1000
-   `write_tohost` symbol hits (999 loop iterations in 15 binaries, 1000 in the other 56). Its log
-   therefore ends on a later iteration of the same store instruction, not on a different
-   instruction. The simulator halts on the first such store.
+5. **Truncate the reference** immediately after the **first** commit that stores a nonzero value to
+   `tohost`. Every iteration of Spike's `write_tohost` loop stores a nonzero value, and Spike
+   notices the halt only on its next device poll, so its log runs roughly 999 further iterations
+   (measured: 999 in 15 binaries, 1000 in the other 56) before stopping. Where that log *ends* is
+   also not the halt store: measured, the last record is the store itself in 56 binaries, one
+   commit later in 14 (`auipc t5, 0x1`), and three commits later in `rv64mi-p-illegal`. The
+   simulator halts on the first such store; the differ truncates the reference there and ignores
+   everything after it.
 
 ## 6. Initial state at the ELF entry point
 
@@ -145,22 +147,21 @@ and `0x80002000` for `rv64ui-p-ld_st` and `rv64ui-p-ma_data`. Hardcoding it pass
 - Only one interrupt is taken across the corpus: `interrupt#1` in `rv64mi-p-illegal`, raised by
   the test arming SSIP in `mie`/`mip`.
 
-## 9. Decisions the architect must make
+## 9. Decisions, taken by the architect on 2026-09-26
 
-**F1 — CSR writes on the trace line (recommended: keep them).** The draft in
-`docs/notes/s1-plan.md` stripped Spike's `c<num>_<name>` annotations. Keeping them turns M3's CSR
-surface from unverifiable into verified for free: WARL masking, `mret`'s implicit `mstatus` write,
-and the U/S views of `mstatus` all become ordinary diffs. The cost is that the implementer must
-log CSR writes, which is real work in M3 and near-zero in M5.
+Both were approved with this freeze; the rationale and the rejected alternatives are recorded in
+ADR 006, and this section only states the outcome.
 
-**F2 — literal rendering (recommended: our own compact form, as in §4).** The alternative is to
-emit Spike's line text verbatim, which shrinks the differ to "filter two record kinds, truncate,
-diff" at the cost of a simulator whose stdout only makes sense to someone who knows Spike. §4's
-form keeps the differ small — the rewrite rules in §5.4 are mechanical and testable — while
-leaving the trace readable on its own.
+**F1 — CSR writes stay on the trace line.** §4's `csr<num>_<name>=0x<value>` field is part of the
+frozen surface, which supersedes the draft in `docs/notes/s1-plan.md` that stripped Spike's
+annotations. Consequence: M3 must log CSR writes as it goes, not defer them to M5.
+
+**F2 — compact rendering; §5 normalizes the reference.** The simulator emits §4's records; §5's
+rewrite rules are applied to Spike's log only. Consequence: the differ owns a small rewrite table,
+which is itself test code and is tested as such.
 
 **F3 — nothing else.** The method order in work order 001 (M1…M5) is unaffected by this freeze.
 
-On approval this file becomes frozen, the work order moves to `frozen`, and the implementer
-starts M1. Until then M1 does not start: the CLI, the halt protocol and the record format are
-this file's subject, and M1 builds all three.
+This file is frozen. Work order 001 is `frozen`; the implementer starts M1 against this surface.
+The verifier's next deliverable is the failing Spike-diff harness, which is what makes M1's "done"
+checkable.
