@@ -89,7 +89,7 @@ translation; if you prefer another word, change only that cell.
 | commit log | 提交日志 | Spike's `--log-commits` output |
 | normalization | 归一化 | The closed rewrite list in the freeze |
 | first divergence | 首个分歧点 | Index, PC and both lines in the report |
-| corpus | 测试语料库 | 54 `rv64ui-p` + 17 `rv64mi-p` for S1 |
+| test set | 测试集 | 54 `rv64ui-p` + 17 `rv64mi-p` for S1; replaced “corpus” on 2026-09-26 |
 | conformance | 一致性 / 符合性 | Claim against RVA22S64 |
 | profile | 架构配置文件 | RVA22S64, RVA23S64 |
 | pass criteria | 通过标准 | What "green" means, per slice |
@@ -98,7 +98,7 @@ translation; if you prefer another word, change only that cell.
 | determinism | 确定性 | Same input, same trace, every run |
 | reproducible | 可复现 | Anyone can rerun the measurement |
 | regression | 回归 | A previously green slice turning red |
-| coverage | 覆盖率 | What the corpus does *not* reach |
+| coverage | 覆盖率 | What the test set does *not* reach |
 | false negative | 漏报 | A bug the gate misses |
 | false positive | 误报 | A failure that is not a defect |
 | spin | 空转 / 自旋 | Spike's `write_tohost` loop after the halt store |
@@ -126,3 +126,11 @@ translation; if you prefer another word, change only that cell.
 | coupling / cohesion | 耦合 / 内聚 | Module-boundary quality |
 | technical debt | 技术债 | Known, recorded, not hidden |
 | definition of done | 完成定义 | Verifier runs the acceptance command |
+
+## 5. 已弃用术语 / Retired terms
+
+Keep the retired word here so a reader who searches for it lands on its replacement.
+
+| Retired | 旧译法 | Use instead |
+|---|---|---|
+| corpus | 语料库 | **test set**（测试集）— “corpus” is linguistics vocabulary and hides that this is a fixed list of built binaries |
