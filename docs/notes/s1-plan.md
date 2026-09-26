@@ -82,6 +82,10 @@ Full detail in `docs/verification/s1-freeze.md`. Summary:
 
 - `src/` holds only the `main.rs` stub: the earlier drafts were removed, so the implementer starts
   from a clean room. Nothing is written yet for M1–M5.
-- `docs/work-orders/001-s1-base.md` exists and is `proposed`.
-- `docs/verification/s1-freeze.md` does not exist: the verifier drafts it, the architect approves,
-  and that approval is what flips the work order to `frozen`.
+- `docs/verification/s1-freeze.md` is approved; work order 001 is therefore `frozen` and M1 may
+  start. Policy recorded in ADR 006 — retirement equivalence after a closed normalization list,
+  with CSR writes compared rather than dropped.
+- Two corrections the review of the freeze requires (trap entry logs no CSR write; §5.5's wording)
+  are still outstanding in the verifier's file.
+- **Scope correction:** S1 is M/U/**S** modes, not M/U — `rv64mi-p-illegal` runs 30 commits in
+  S-mode, uses `sret`, and takes one `supervisor_ecall`.

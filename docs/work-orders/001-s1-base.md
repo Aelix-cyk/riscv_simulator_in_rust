@@ -1,6 +1,6 @@
 # Work order 001 — S1 base slice
 
-**Status:** proposed (awaits the verifier's freeze and the architect's approval)
+**Status:** frozen (architect approved `docs/verification/s1-freeze.md` on 2026-09-26, ADR 006)
 **Owner:** implementer (`src/**`), verifier (`tests/**`, `docs/verification/**`)
 **Branch:** `codex/s1-isa-freeze` · **Plan:** `docs/notes/s1-plan.md`
 
@@ -48,6 +48,11 @@ it, and only then does this work order become `frozen` and implementation start.
 Implementer writes `src/**` and `docs/implementation/**`; verifier writes `tests/**` and
 `docs/verification/**`; the assistant writes work orders, ADRs and notes. Anything outside your
 zone needs a one-line permission request recorded here.
+
+Permission granted 2026-09-26 by the architect: the assistant may edit
+`docs/verification/s1-freeze.md` to apply the two corrections from
+`docs/notes/s1-freeze-review.md` and to flip its status line. Expires when this work order is
+accepted.
 
 ## Evidence
 
