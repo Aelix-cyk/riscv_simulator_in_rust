@@ -58,7 +58,8 @@ the hardest to prove.
 
 ## Verification strategy
 
-- Differential against Spike, trace-exact, per slice; a slice is green only on its whole corpus.
+- Differential against Spike, retirement-equivalent after the documented normalization, per slice;
+  a slice is green only on its whole corpus.
 - Conformance evidence comes from `riscv-arch-test` coverpoints for the RVA22S64 profile columns;
   the profile's own CRD is still not on this machine, so the extension list above is quoted from
   the coverage matrix, not from the ratified profile document.

@@ -7,7 +7,8 @@ test-first baton. Nothing travels between agents except files in this repo.
 
 Agents lose context, run in parallel, and share one filesystem. Chat is unlogged and vanishes;
 artifacts survive compaction, can be diffed, and let a fifth agent join later. The cost is one
-round trip per cycle — acceptable for a simulator whose gates are trace-exact comparisons.
+round trip per cycle — acceptable for a simulator whose gates are retirement-level comparisons
+against the oracle.
 
 ## 2. The cycle
 
