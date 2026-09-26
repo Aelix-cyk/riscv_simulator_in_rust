@@ -33,6 +33,16 @@ any change to the list in the freeze.
 difference rules, machine state, CSR table, trap and interrupt behaviour), the architect approves
 it, and only then does this work order become `frozen` and implementation start.
 
+Satisfied 2026-09-26: the freeze is approved and this order is `frozen`. The remaining start
+condition is the verifier's failing harness (architect, 2026-09-26): **M1 does not begin until the
+Spike-diff harness is in `tests/`**, so the first line of simulator code already has a red test
+waiting for it.
+
+Harness shape, so the red state is useful: it must fail as an **assertion**, not as a compile
+error. Drive the simulator as a subprocess (`cargo run --release -- <elf> --trace`) rather than
+through a library API that does not exist yet, so a stub `main.rs` produces "first divergence at
+record 0" instead of breaking `cargo test` for every other test.
+
 ## Method order (architect approves each method before it is written)
 
 | # | Method | Deliverable |

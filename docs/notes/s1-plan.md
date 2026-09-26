@@ -89,3 +89,7 @@ Full detail in `docs/verification/s1-freeze.md`. Summary:
   are still outstanding in the verifier's file.
 - **Scope correction:** S1 is M/U/**S** modes, not M/U — `rv64mi-p-illegal` runs 30 commits in
   S-mode, uses `sret`, and takes one `supervisor_ecall`.
+- **Sequencing (architect, 2026-09-26):** M1 waits for the verifier's failing Spike-diff harness,
+  so implementation starts against a red test rather than against nothing. The harness must fail as
+  an assertion, not as a compile error — subprocess the stub binary, do not call a library API that
+  does not exist yet.
