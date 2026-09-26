@@ -43,5 +43,5 @@ Build identity: `Spike RISC-V ISA Simulator 1.1.1-dev`, `riscv-isa-sim.git` at `
 
     cargo build
 
-The CLI and trace surfaces are not frozen yet; the verifier proposes them and the architect
+The CLI and trace surfaces are not baselined yet; the verifier proposes them and the architect
 approves before any simulator code is written.

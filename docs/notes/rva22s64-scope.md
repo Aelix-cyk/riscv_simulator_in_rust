@@ -1,11 +1,11 @@
 # RVA22S64 scope and slices
 
-Companion to ADR 005 (which supersedes ADR 002). One slice = one architect-approved freeze, then
+Companion to ADR 005 (which supersedes ADR 002). One slice = one architect-approved baseline, then
 one implement, then one verify cycle.
 
 ## Slices, in build order
 
-| # | Slice | Corpus on disk | Why here |
+| # | Slice | Test set on disk | Why here |
 |---|---|---|---|
 | S1 | RV64I + Zicsr + Zifencei + Zicntr, M/U modes and traps | `rv64ui-p-*` (108), `rv64mi-p-*` (34) | Everything else assumes correct decode, CSRs, and traps |
 | S2 | M | `rv64um-p-*` (26) | Self-contained, cheap, unblocks a real compiler target |
@@ -59,7 +59,7 @@ the hardest to prove.
 ## Verification strategy
 
 - Differential against Spike, retirement-equivalent after the documented normalization, per slice;
-  a slice is green only on its whole corpus.
+  a slice is green only on its whole test set.
 - Conformance evidence comes from `riscv-arch-test` coverpoints for the RVA22S64 profile columns;
   the profile's own CRD is still not on this machine, so the extension list above is quoted from
   the coverage matrix, not from the ratified profile document.

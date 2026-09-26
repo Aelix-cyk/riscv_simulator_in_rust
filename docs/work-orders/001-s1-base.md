@@ -1,13 +1,13 @@
 # Work order 001 — S1 base slice
 
-**Status:** frozen (architect approved `docs/verification/s1-freeze.md` on 2026-09-26, ADR 006)
+**Status:** baselined (architect approved `docs/verification/s1-surface.md` on 2026-09-26, ADR 006)
 **Owner:** implementer (`src/**`), verifier (`tests/**`, `docs/verification/**`)
 **Branch:** `codex/s1-isa-freeze` · **Plan:** `docs/notes/s1-plan.md`
 
 ## Goal
 
 Run a riscv-tests pseudo-ELF to completion and emit a retirement trace whose retirement events
-match Spike's, after the normalization the freeze defines, on all 71 S1 binaries: 54 `rv64ui-p-*`
+match Spike's, after the normalization the baseline defines, on all 71 S1 binaries: 54 `rv64ui-p-*`
 and 17 `rv64mi-p-*`.
 
 ## Acceptance
@@ -25,15 +25,15 @@ Two limits, approved by the architect on 2026-09-26:
 
 Any divergence is either a pinned-configuration mismatch (fix the configuration) or a simulator
 bug (fix the code). Adding a normalization to hide it is not an option; the verifier must approve
-any change to the list in the freeze.
+any change to the list in the baseline.
 
 ## Depends on
 
-`docs/verification/s1-freeze.md` — the verifier drafts the observable surface (CLI, trace line,
+`docs/verification/s1-surface.md` — the verifier drafts the observable surface (CLI, trace line,
 difference rules, machine state, CSR table, trap and interrupt behaviour), the architect approves
-it, and only then does this work order become `frozen` and implementation start.
+it, and only then does this work order become `baselined` and implementation start.
 
-Satisfied 2026-09-26: the freeze is approved and this order is `frozen`. The remaining start
+Satisfied 2026-09-26: the baseline is approved and this order is `baselined`. The remaining start
 condition is the verifier's failing harness (architect, 2026-09-26): **M1 does not begin until the
 Spike-diff harness is in `tests/`**, so the first line of simulator code already has a red test
 waiting for it.
@@ -51,7 +51,7 @@ record 0" instead of breaking `cargo test` for every other test.
 | M2 | decode | pure `decode(word) -> Insn`, illegal-encoding detection |
 | M3 | hart/CSR/trap | hart state, CSR WARL table, trap entry, `mret`, U-mode, interrupts |
 | M4 | execute | RV64I semantics via dispatch table |
-| M5 | trace | emitter, exit codes, differential loop until the corpus is green |
+| M5 | trace | emitter, exit codes, differential loop until the test set is green |
 
 ## Zones
 
@@ -60,9 +60,13 @@ Implementer writes `src/**` and `docs/implementation/**`; verifier writes `tests
 zone needs a one-line permission request recorded here.
 
 Permission granted 2026-09-26 by the architect: the assistant may edit
-`docs/verification/s1-freeze.md` to apply the two corrections from
-`docs/notes/s1-freeze-review.md` and to flip its status line. Expires when this work order is
+`docs/verification/s1-surface.md` to apply the two corrections from
+`docs/notes/s1-baseline-review.md` and to flip its status line. Expires when this work order is
 accepted.
+
+Permission granted 2026-09-26 by the architect: the assistant may sweep the term “corpus” →
+“test set” across `docs/verification/**` and the living notes, leaving accepted ADRs untouched.
+Expires when this work order is accepted.
 
 ## Evidence
 
@@ -70,4 +74,4 @@ accepted.
   differential step locally (`cargo test --test s1_differential -- --ignored --test-threads=1`)
   as a self-check and record the first divergence they fixed; acceptance is still the verifier's
   run on the merged state.
-- Verifier: `docs/verification/reports/001-s1.md` with the corpus result and any first divergence.
+- Verifier: `docs/verification/reports/001-s1.md` with the test set result and any first divergence.

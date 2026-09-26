@@ -1,6 +1,6 @@
 # Glossary — English / 中文对照表
 
-Owner: assistant. English is canonical: code, issues, commits, ADRs and freezes use the English
+Owner: assistant. English is canonical: code, issues, commits, ADRs and baselines use the English
 column, and this table exists so the architect can read and discuss those artifacts without
 re-deriving the terms. The Chinese column is a working rendering, not an official RISC-V
 translation; if you prefer another word, change only that cell.
@@ -87,7 +87,7 @@ translation; if you prefer another word, change only that cell.
 | trace | 执行轨迹 | One record per retired instruction |
 | retirement (retire) | 退休 | An instruction completes architecturally |
 | commit log | 提交日志 | Spike's `--log-commits` output |
-| normalization | 归一化 | The closed rewrite list in the freeze |
+| normalization | 归一化 | The closed rewrite list in the baseline |
 | first divergence | 首个分歧点 | Index, PC and both lines in the report |
 | test set | 测试集 | 54 `rv64ui-p` + 17 `rv64mi-p` for S1; replaced “corpus” on 2026-09-26 |
 | conformance | 一致性 / 符合性 | Claim against RVA22S64 |
@@ -111,10 +111,10 @@ translation; if you prefer another word, change only that cell.
 | architect | 架构师 | You: decides scope, approves methods |
 | assistant | 助手 | Me: work orders, ADRs, integration, review |
 | implementer | 实现者 | Writes `src/**` |
-| verifier | 验证者 | Writes `tests/**` and the freeze |
+| verifier | 验证者 | Writes `tests/**` and the baseline |
 | work order | 工作单 | `docs/work-orders/NNN-*.md` |
 | architecture decision record (ADR) | 架构决策记录 | Append-only log, one decision per record |
-| freeze | 冻结 | The approved observable surface |
+| baseline | 基线 | The approved observable surface; “baselined v1” is its state |
 | approval gate | 审批门 | Nothing is implemented before it opens |
 | write zone | 写入区 | Who may edit which directory |
 | baton | 交接棒 | Sequential handoff, one writer at a time |
@@ -134,3 +134,4 @@ Keep the retired word here so a reader who searches for it lands on its replacem
 | Retired | 旧译法 | Use instead |
 |---|---|---|
 | corpus | 语料库 | **test set**（测试集）— “corpus” is linguistics vocabulary and hides that this is a fixed list of built binaries |
+| freeze | 冻结 | **baseline**（基线）— a freeze is a state you declare; a baseline is an approved configuration that changes through numbered versions |

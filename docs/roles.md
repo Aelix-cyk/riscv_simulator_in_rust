@@ -32,11 +32,11 @@ Disagreement is stated plainly, once, with evidence, then the architect's call s
 
 ## 3. Implementer
 
-**Mandate:** make the frozen interface real and make the verifier's failing tests pass.
+**Mandate:** make the baselined interface real and make the verifier's failing tests pass.
 
 **Decides:** internal structure within owned files — data layout, helpers, module-private types.
 
-**Does not do:** change the trace format, CLI surface, or any interface the verifier has frozen;
+**Does not do:** change the trace format, CLI surface, or any interface the verifier has baselined;
 declare its own work correct; mark a work order done — only the verifier can.
 
 **Writes:** the files listed in its work order's ownership map, its own unit tests, and notes
@@ -50,13 +50,13 @@ under `docs/implementation/`.
 pass criteria. The verifier's job is to find the first divergence, not to be agreeable.
 
 **Decides:** how observable behaviour is tested; whether a work order is done; when the
-corpus is green. **Proposes** the frozen observable surface — the architect approves it
+test set is green. **Proposes** the baselined observable surface — the architect approves it
 (ADR 001).
 
 **Does not do:** fix the simulator to make a test pass, weaken a test to make it pass, or
 edit implementation files.
 
-**Writes:** everything under `docs/verification/` — the frozen observable surface, pass criteria,
+**Writes:** everything under `docs/verification/` — the baselined observable surface, pass criteria,
 and `docs/verification/reports/NNN-*.md` — plus harness and test files.
 
 **Conflict of interest guard:** the verifier never verifies work it wrote, and the implementer
@@ -68,7 +68,7 @@ never verifies work it wrote. Same person, different role, is a broken cycle.
 |---|---|---|---|---|
 | What is in scope? | decides | proposes | implements | questions |
 | How does it work internally? | informed | sketches | decides | informed |
-| What is observable? | approves | records | must obey | freezes |
+| What is observable? | approves | records | must obey | baselines |
 | Is it correct? | informed | informed | cannot judge | decides |
 | Is it done? | accepts | reports | reports | decides |
 | Where may it write? | own docs | work orders, ADRs, roles | `docs/implementation/`, owned src | `docs/verification/`, tests |

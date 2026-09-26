@@ -1,6 +1,6 @@
 # Cooperation Mechanism (v0)
 
-One mechanism, three parts: an artifact-mediated pull queue, an interface freeze, and a
+One mechanism, three parts: an artifact-mediated pull queue, an interface baseline, and a
 test-first baton. Nothing travels between agents except files in this repo.
 
 ## 1. Why files, not chat
@@ -13,7 +13,7 @@ against the oracle.
 ## 2. The cycle
 
 1. **Architect** sets intent; **assistant** writes `docs/work-orders/NNN-<slug>.md` with goal,
-   owned files, acceptance command, and the frozen interfaces it depends on.
+   owned files, acceptance command, and the baselined interfaces it depends on.
 2. **Verifier** proposes the observable surface for that unit (signatures, CLI, trace format) in
    `docs/verification/`; the **architect** approves it; the verifier then lands a failing
    Spike-diff harness. The implementer does not start until approval lands (ADR 001).
@@ -29,10 +29,10 @@ harness while the implementer finishes the current one. Never within the same wo
 ## 3. Work order anatomy
 
 ```
-ID / slug / status: proposed | frozen (architect-approved surface) | implementing | verifying | accepted | blocked
+ID / slug / status: proposed | baselined (architect-approved surface) | implementing | verifying | accepted | blocked
 Goal: one sentence, observable outcome
 Owned files: explicit list (one writer per file, always)
-Depends on: frozen interfaces and accepted ADRs
+Depends on: baselined interfaces and accepted ADRs
 Acceptance: exact command(s) + what green means
 Evidence: filled by implementer and verifier, not by the author of the goal
 ```
@@ -59,15 +59,15 @@ Evidence: filled by implementer and verifier, not by the author of the goal
 
 ## 5. Definition of done
 
-Per the criteria frozen in `docs/verification/`: trace-level equivalence with Spike first, exit
-status second, whole `rv64ui-p-*` corpus before trusting either. A work order is accepted only
+Per the criteria recorded in the baseline under `docs/verification/`: trace-level equivalence with Spike first, exit
+status second, whole `rv64ui-p-*` test set before trusting either. A work order is accepted only
 when the verifier has run the acceptance command on the merged state and recorded the output.
 
 ## 6. Failure modes this is designed against
 
 | Failure | Mechanism that catches it |
 |---|---|
-| Implementer and verifier invent different trace formats | Interface freeze, step 2 before step 3 |
+| Implementer and verifier invent different trace formats | Interface baseline, step 2 before step 3 |
 | Both "pass" because the test was weakened | Pass criteria owned and recorded by the verifier; architect approves changes |
 | Two agents edit one file | Ownership map, one writer per file |
 | Silent scope creep | Work order goal is one sentence and observable |
