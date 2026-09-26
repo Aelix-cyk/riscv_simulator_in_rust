@@ -51,6 +51,11 @@ Evidence: filled by implementer and verifier, not by the author of the goal
 - **Batch by module.** One cycle covers a coherent unit (decode, ALU, memory, trap), not one method.
   Fewer, larger cycles beat many tiny round trips.
 - **Escalate after two failures.** Third attempt is a signal the interface or the work order is wrong.
+- **Git is gated.** The implementer and the verifier never run git commands — no `add`, `commit`,
+  `branch`, `checkout`, `push` or any other. The assistant stages the approved paths and commits
+  them; the architect alone pushes and performs remote operations.
+- **Commit messages are subject-only.** The file list belongs in the commit proposal, never in the
+  message body; a body carries only a *why* the subject cannot.
 
 ## 5. Definition of done
 

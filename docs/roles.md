@@ -72,6 +72,7 @@ never verifies work it wrote. Same person, different role, is a broken cycle.
 | Is it correct? | informed | informed | cannot judge | decides |
 | Is it done? | accepts | reports | reports | decides |
 | Where may it write? | own docs | work orders, ADRs, roles | `docs/implementation/`, owned src | `docs/verification/`, tests |
+| May it run git? | pushes, and owns remote ops | stages and commits on approval | never | never |
 
 ### Write zones and permission
 
