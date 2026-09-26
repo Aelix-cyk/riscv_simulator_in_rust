@@ -47,6 +47,22 @@ Exit status is the riscv-tests verdict, taken from the value stored to `tohost`:
 `--trace` writes only the records of §4, one per line, in commit order. Everything the simulator
 prints is deterministic: no timestamps, no host addresses, no map iteration order.
 
+### 3.1 The differential step
+
+    cargo test --test s1_differential -- --ignored --test-threads=1
+
+The step is a tool for both roles and a verdict for exactly one (architect, 2026-09-26):
+
+- **Implementer:** may run it locally at any time as a self-check. It judges only the frozen
+  surface below, so running it cannot weaken it; a green local run is evidence for the work order,
+  never acceptance, and it changes nothing about the git rule.
+- **Verifier:** acceptance is the verifier's independent run on the merged state, recorded twice
+  with any first divergence in `docs/verification/reports/001-s1.md`.
+- It stays `#[ignore]`d, so `cargo test` never picks it up: a green unit suite cannot be mistaken
+  for acceptance, and the oracle run stays out of the fast edit loop.
+- The step owns the oracle invocation (§2), the normalization (§5), the corpus list, and the
+  first-divergence report. Nothing about how it judges lives in `src/**`.
+
 ## 4. Records
 
 Two record kinds. Angle brackets are placeholders; literal text is literal. Hex digits are

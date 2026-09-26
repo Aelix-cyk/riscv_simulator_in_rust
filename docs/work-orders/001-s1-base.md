@@ -66,5 +66,8 @@ accepted.
 
 ## Evidence
 
-- Implementer: files touched, commands run, failures seen, one line per method.
+- Implementer: files touched, commands run, failures seen, one line per method. May run the
+  differential step locally (`cargo test --test s1_differential -- --ignored --test-threads=1`)
+  as a self-check and record the first divergence they fixed; acceptance is still the verifier's
+  run on the merged state.
 - Verifier: `docs/verification/reports/001-s1.md` with the corpus result and any first divergence.
