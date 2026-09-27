@@ -197,8 +197,9 @@ architect's sign-off separately.
 
 ## 10. Additions from the review of 2026-09-26 — accepted
 
-`docs/notes/s1-harness-review.md` §3 listed five additions. All five are accepted and folded in
-here; none change the shape of §1.
+The harness review of 2026-09-26 listed five additions (the note itself was removed on 2026-09-27;
+`docs/notes/audit-index.md` records the commit that still holds it). All five are accepted and
+folded in here; none change the shape of §1.
 
 1. **Test the normalizer itself.** ADR 006 makes the differ trusted code, so each rewrite rule gets
    a fixture: the two-line trap form, a line with a CSR annotation, a line with both a register

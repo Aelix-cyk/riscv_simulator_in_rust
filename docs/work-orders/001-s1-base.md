@@ -61,7 +61,7 @@ zone needs a one-line permission request recorded here.
 
 Permission granted 2026-09-26 by the architect: the assistant may edit
 `docs/verification/s1-surface.md` to apply the two corrections from
-`docs/notes/s1-baseline-review.md` and to flip its status line. Expires when this work order is
+`docs/notes/audit-index.md` (the review itself removed 2026-09-27) and to flip its status line. Expires when this work order is
 accepted.
 
 Permission granted 2026-09-26 by the architect: the assistant may sweep the term “corpus” →
@@ -76,11 +76,15 @@ exception line carries no privilege, and inferring it from the previous record i
 `rv64mi-p-illegal`).
 
 Approved 2026-09-27 by the architect: the harness design in
-`docs/verification/s1-harness-design.md`, together with the five additions in
-`docs/notes/s1-harness-review.md`. This authorizes the verifier to write
+`docs/verification/s1-harness-design.md`, together with the five additions it took from the
+harness review (`docs/notes/audit-index.md` records where that note now lives). This authorizes the verifier to write
 `tests/s1_differential.rs` and run it against the stub `src/main.rs`, where it must fail as
 assertions on all 71 binaries. **That red run is the last start condition for M1.** The design
 assumes the v2 trap record, so change note 01 lands before the harness runs.
+
+Permission granted 2026-09-27 by the architect: the assistant may re-point the reference to the
+harness review in `docs/verification/s1-harness-design.md` §10 at the audit index, since the note
+it named was removed. Expires when this work order is accepted.
 
 ## Evidence
 
