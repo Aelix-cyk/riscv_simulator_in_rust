@@ -68,6 +68,20 @@ Permission granted 2026-09-26 by the architect: the assistant may sweep the term
 “test set” across `docs/verification/**` and the living notes, leaving accepted ADRs untouched.
 Expires when this work order is accepted.
 
+Approved 2026-09-27 by the architect: `docs/verification/s1-surface.md` §4 drops `p<priv>` from
+the trap record, so the field reads `trap <name> epc=0x<value> [tval=0x<value>]`. The verifier
+applies it as **change note 01** and raises the baseline to **v2**; reason on record: Spike's
+exception line carries no privilege, and inferring it from the previous record is unsound because
+`mret`/`sret` change mode for the next instruction (measured: three such traps in
+`rv64mi-p-illegal`).
+
+Approved 2026-09-27 by the architect: the harness design in
+`docs/verification/s1-harness-design.md`, together with the five additions in
+`docs/notes/s1-harness-review.md`. This authorizes the verifier to write
+`tests/s1_differential.rs` and run it against the stub `src/main.rs`, where it must fail as
+assertions on all 71 binaries. **That red run is the last start condition for M1.** The design
+assumes the v2 trap record, so change note 01 lands before the harness runs.
+
 ## Evidence
 
 - Implementer: files touched, commands run, failures seen, one line per method. May run the
