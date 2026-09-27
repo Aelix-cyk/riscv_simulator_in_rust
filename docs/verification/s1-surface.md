@@ -1,10 +1,31 @@
-# S1 surface — baseline v1
+# S1 surface — baseline v3
 
-**Status:** baselined v1 (architect approved 2026-09-26; ADR 001, ADR 006)
-**Owner:** verifier · **Date:** 2026-09-26 · **Baseline:** v1 — a change after this point gets a
-numbered change note and raises the version to v2, instead of being edited in place.
+**Status:** baselined v3 (v1 approved 2026-09-26; change notes 1 and 2 approved 2026-09-27;
+ADR 001, ADR 006)
+**Owner:** verifier · **Date:** 2026-09-26, change notes added 2026-09-27 · **Baseline:** v3 — a
+change after this point gets a new numbered note below and raises the version to v4.
 **Confidence:** high on the line inventory and normalization (measured), and high on both §9
 decisions now that they are taken
+
+## Change notes
+
+**1 — 2026-09-27: the trap record loses `p<priv>` (v1 → v2).** Spike's exception line does not
+carry the privilege the trap was taken from, and the neighbouring records cannot recover it:
+`mret`/`sret` changes the privilege for the *next* instruction while its own record shows the mode
+it *executed* in. Measured in `rv64mi-p-illegal`: three trap records are immediately preceded by a
+trap-return commit — two `mret` executed in M-mode, one `sret` executed in S-mode — so in those
+three the previous record's privilege is provably not the trap's. Recovering the value would mean
+reimplementing trap-return privilege semantics inside the differ, the risk ADR 006 already names.
+Section §4 is the only text that changes; the privilege at a trap stays exercised through the
+handler's commit records and through the mode seen when execution returns. Evidence and worked
+example: `docs/verification/s1-harness-design.md` §4.
+
+**2 — 2026-09-27: §5 rule 4 also covers the trap name (v2 → v3).** §4's trap names are
+`illegal_instruction` and `interrupt#<code>`, but the oracle prints `trap_illegal_instruction` and
+`interrupt #1`. Rule 4 named the privilege, CSR and `mem` rewrites and not this one, which left the
+normalizer's mapping an unlisted rewrite. §4 — the observable surface — is unchanged; §5.4 now
+states the mapping. Found while writing the harness, when real log lines could not reach §4's
+grammar without it: `tests/s1_differential.rs`, fixture `FIXTURE_TRAP`.
 
 Everything below is derived from running the pinned oracle over the whole S1 test set on
 2026-09-26: 71/71 binaries exit 0, producing 836,465 log lines. Counts quoted here are measured,
@@ -86,7 +107,7 @@ carries `pc`, `insn` and `p<priv>`; the optional fields may all be absent (e.g. 
 
 ### Trap record — one per taken trap, replacing that instruction's commit record
 
-    trap <name> p<priv> epc=0x<value> [tval=0x<value>]
+    trap <name> epc=0x<value> [tval=0x<value>]
 
     name   illegal_instruction | instruction_address_misaligned | breakpoint
            | user_ecall | supervisor_ecall | machine_ecall | interrupt#<code>
@@ -94,6 +115,9 @@ carries `pc`, `insn` and `p<priv>`; the optional fields may all be absent (e.g. 
            absent for the three ecall traps and for interrupts
 
 The trapping instruction gets a trap record and no commit record.
+
+The trap record carries no privilege field: see change note 1. The privilege is observable in the
+commit records that follow the trap, not in the trap record itself.
 
 ## 5. Normalization — the complete list
 
@@ -107,7 +131,8 @@ architect's sign-off.
    `0x1000…0x1010` (355 records over the test set) that jump to the ELF entry. The simulator has no
    ROM; §6 pins the register state the ROM leaves behind.
 3. **Fold** the trap continuation line (`core 0:           tval 0x…`) into the trap record.
-4. **Token rewriting:** Spike's privilege field `<priv>` → `p<priv>`; its CSR annotation
+4. **Token rewriting:** Spike's privilege field `<priv>` → `p<priv>`; its trap name `trap_<name>` →
+   `<name>`, and `interrupt #<code>` → `interrupt#<code>`; its CSR annotation
    `c<num>_<name> 0x<value>` → `csr<num>_<name>=0x<value>`; its load annotation `mem 0x<addr>` and
    store annotation `mem 0x<addr> 0x<value>` → the `mem` forms in §4.
 5. **Truncate the reference** immediately after the **first** commit that stores a nonzero value to
