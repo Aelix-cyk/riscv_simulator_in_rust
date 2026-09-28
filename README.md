@@ -22,14 +22,25 @@ resolves through `$SPIKE`, or through `PATH` when that is unset:
 
 Build identity: `Spike RISC-V ISA Simulator 1.1.1-dev`, `riscv-isa-sim.git` at `8fc5ab03`.
 
-## Tooling you supply
+## Environment
 
-| Variable | What to point it at |
-|---|---|
-| `$RISCV_TESTS_DIR` | a `riscv-tests` checkout — per-slice `rv64*-p-*` test sets, the working reference |
-| `$RISCV_ARCH_TEST_DIR` | a `riscv-arch-test` checkout — RVA22S64 certification plans and coverpoints |
-| `$OPENSBI_DIR` | an `opensbi` checkout — M-mode firmware source for the boot phase |
-| `$RISCV_TOOLCHAIN_DIR` | a RISC-V GNU toolchain — compiler and binutils |
+No machine path is committed; everything machine-specific arrives through these variables. This
+table is the single place they are listed.
+
+| Variable | Needed | What it is | Used by |
+|---|---|---|---|
+| `RISCV_TESTS_DIR` | required | a `riscv-tests` checkout; the test sets live in `$RISCV_TESTS_DIR/isa` | `tests/s1_differential.rs`, the M1 loader sweep |
+| `SPIKE` | optional | the oracle binary; falls back to `spike` on `PATH` | the differential step |
+| `RISCV` | toolchain | the RISC-V toolchain prefix, with `$RISCV/bin` on `PATH` | building test binaries |
+| `RISCV_ARCH_TEST_DIR` | later | a `riscv-arch-test` checkout | conformance coverpoints, from S8 |
+| `OPENSBI_DIR` | later | an `opensbi` checkout | M-mode firmware, S9 |
+
+    export RISCV=/opt/riscv
+    export PATH="$RISCV/bin:$PATH"
+    export RISCV_TESTS_DIR=~/tools/riscv-tests
+    export RISCV_ARCH_TEST_DIR=~/tools/riscv-arch-test
+    export OPENSBI_DIR=~/tools/opensbi
+    # export SPIKE="$RISCV/bin/spike"    # only when spike is not on PATH
 
 ## Where things live
 

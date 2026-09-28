@@ -47,14 +47,11 @@ memory must work, not trap), Za64rs/Zic64b size constraints, Zfhmin half-precisi
 Svade/Svpbmt/Svinval/Sstvecd/Sstvala behavioural set. The last group is the easiest to miss and
 the hardest to prove.
 
-## Toolchain inventory (verified 2026-09-24)
+## Toolchain inventory
 
-| Variable | What it gives us |
-|---|---|
-| `$RISCV_TESTS_DIR` | Per-slice `-p-` test sets with `.dump` files — the working reference |
-| `$RISCV_ARCH_TEST_DIR` | Certification test plans, coverpoints, Spike/SAIL/Imperas configs |
-| `$OPENSBI_DIR` | M-mode firmware source for the S9 boot path |
-| `$RISCV_TOOLCHAIN_DIR` | Compiler and binutils |
+The environment variables this project reads are listed once, in the README's `Environment`
+section: `RISCV_TESTS_DIR` (required), `SPIKE` (optional), `RISCV`, `RISCV_ARCH_TEST_DIR`,
+`OPENSBI_DIR`. They are not repeated here.
 
 ## Verification strategy
 
