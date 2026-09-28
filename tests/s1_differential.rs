@@ -7,9 +7,10 @@
 //!     cargo test --test s1_differential -- --ignored --test-threads=1
 //!
 //! The unit tests at the end of this file are *not* ignored: they exercise the normalizer, which
-//! ADR 006 flags as trusted code, and they need neither oracle nor test set. The one exception is
-//! the symbol reader, which reads a real test binary and is therefore `#[ignore]`d — the ordinary
-//! suite stays runnable in a bare checkout with no environment configured.
+//! ADR 006 flags as trusted code, and the symbol reader, which is covered by synthetic images
+//! built in memory. Nothing in the ordinary suite needs the oracle, the test set, or an
+//! environment variable, so it runs in a bare checkout. One extra ignored test checks the same
+//! reader against a real test binary when `$RISCV_TESTS_DIR` is set.
 //!
 //! Shape, per `docs/verification/s1-harness-design.md`: spike and the simulator are both driven as
 //! subprocesses, black box, through the frozen CLI. Nothing here reaches into `src/**`.
@@ -946,8 +947,8 @@ fn normalizer_rewrites_fields() {
     }
 }
 
-/// Reads a real test binary, so it needs `$RISCV_TESTS_DIR`; the implementer's M1 loader sweep
-/// covers the same path in the ordinary suite, over all 71 images.
+/// Reads a real test binary, so it needs `$RISCV_TESTS_DIR`. The synthetic fixtures below cover
+/// the same code in the ordinary suite; this one keeps a real image in the picture.
 #[test]
 #[ignore = "needs $RISCV_TESTS_DIR; run with the differential step"]
 fn tohost_is_read_from_the_symbol_table_not_hardcoded() {
@@ -957,4 +958,82 @@ fn tohost_is_read_from_the_symbol_table_not_hardcoded() {
     assert_eq!(address("rv64ui-p-add"), 0x8000_1000);
     assert_eq!(address("rv64ui-p-ld_st"), 0x8000_2000);
     assert_eq!(address("rv64ui-p-ma_data"), 0x8000_2000);
+}
+
+// --- synthetic fixtures for the symbol reader ----------------------------------------------
+
+/// A minimal ELF64 little-endian image built in memory: valid header, a null section, a symbol
+/// table and a string table, with a `tohost` symbol when requested. No program headers, because
+/// the symbol reader does not look at them.
+fn synthetic_elf(tohost: Option<u64>) -> Vec<u8> {
+    const EHDR: usize = 64;
+    const SHDR: usize = 64;
+    const SYM: usize = 24;
+    let sym_off = EHDR + 3 * SHDR;
+    let sym_size = if tohost.is_some() { 2 * SYM } else { SYM };
+    let str_off = sym_off + sym_size;
+    let strtab: &[u8] = b"\0tohost\0";
+    let mut f = vec![0u8; str_off + strtab.len()];
+
+    f[0..4].copy_from_slice(b"\x7fELF");
+    f[4] = 2; // ELF64
+    f[5] = 1; // little-endian
+    f[6] = 1; // version
+    f[0x10..0x12].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+    f[0x12..0x14].copy_from_slice(&0xF3u16.to_le_bytes()); // EM_RISCV
+    f[0x14..0x18].copy_from_slice(&1u32.to_le_bytes());
+    f[0x18..0x20].copy_from_slice(&0x8000_0000u64.to_le_bytes());
+    f[0x28..0x30].copy_from_slice(&(EHDR as u64).to_le_bytes()); // e_shoff
+    f[0x34..0x36].copy_from_slice(&(EHDR as u16).to_le_bytes()); // e_ehsize
+    f[0x3a..0x3c].copy_from_slice(&(SHDR as u16).to_le_bytes()); // e_shentsize
+    f[0x3c..0x3e].copy_from_slice(&3u16.to_le_bytes()); // e_shnum
+
+    let sh1 = EHDR + SHDR; // SHT_SYMTAB, linking section 2
+    f[sh1 + 4..sh1 + 8].copy_from_slice(&2u32.to_le_bytes());
+    f[sh1 + 0x18..sh1 + 0x20].copy_from_slice(&(sym_off as u64).to_le_bytes());
+    f[sh1 + 0x20..sh1 + 0x28].copy_from_slice(&(sym_size as u64).to_le_bytes());
+    f[sh1 + 0x28..sh1 + 0x2c].copy_from_slice(&2u32.to_le_bytes());
+    f[sh1 + 0x38..sh1 + 0x40].copy_from_slice(&(SYM as u64).to_le_bytes());
+
+    let sh2 = EHDR + 2 * SHDR; // SHT_STRTAB
+    f[sh2 + 4..sh2 + 8].copy_from_slice(&3u32.to_le_bytes());
+    f[sh2 + 0x18..sh2 + 0x20].copy_from_slice(&(str_off as u64).to_le_bytes());
+    f[sh2 + 0x20..sh2 + 0x28].copy_from_slice(&(strtab.len() as u64).to_le_bytes());
+
+    if let Some(value) = tohost {
+        let sym1 = sym_off + SYM;
+        f[sym1..sym1 + 4].copy_from_slice(&1u32.to_le_bytes()); // st_name -> "tohost"
+        f[sym1 + 4] = 0x10; // STB_GLOBAL | STT_OBJECT
+        f[sym1 + 6..sym1 + 8].copy_from_slice(&1u16.to_le_bytes()); // st_shndx
+        f[sym1 + 8..sym1 + 16].copy_from_slice(&value.to_le_bytes());
+    }
+    f[str_off..].copy_from_slice(strtab);
+    f
+}
+
+fn write_fixture(name: &str, bytes: &[u8]) -> PathBuf {
+    let path = scratch_dir().join(name);
+    fs::write(&path, bytes).expect("write the synthetic ELF");
+    path
+}
+
+#[test]
+fn symbol_reader_finds_tohost_in_a_synthetic_image() {
+    let path = write_fixture("synthetic-tohost.elf", &synthetic_elf(Some(0x8000_2000)));
+    assert_eq!(tohost_address(&path).expect("tohost is present"), 0x8000_2000);
+}
+
+#[test]
+fn symbol_reader_reports_a_missing_tohost() {
+    let path = write_fixture("synthetic-no-tohost.elf", &synthetic_elf(None));
+    let error = tohost_address(&path).expect_err("a missing symbol must fail");
+    assert!(error.contains("no `tohost` symbol"), "unexpected message: {error}");
+}
+
+#[test]
+fn symbol_reader_rejects_a_truncated_image() {
+    let bytes = synthetic_elf(Some(0x8000_1000));
+    let path = write_fixture("synthetic-truncated.elf", &bytes[..100]);
+    let error = tohost_address(&path).expect_err("a truncated image must fail");
+    assert!(error.contains("truncated"), "unexpected message: {error}");
 }
