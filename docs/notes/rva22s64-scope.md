@@ -21,7 +21,7 @@ v0 remains **S1–S2** per ADR 003.
 
 ## Pinned oracle invocation (executed successfully 2026-09-24)
 
-    /opt/riscv/bin/spike \
+    spike \
       --isa=rv64imafdc_zicsr_zifencei_zicntr_zihpm_zicclsm_zihintpause_zicbom_zicboz_zicbop_zca_zcd_zba_zbb_zbs_zfhmin_zaamo_zalrsc_svade_svpbmt_svinval \
       --priv=msu -l --log-commits --log=<ref>.log <binary>
 
@@ -47,14 +47,14 @@ memory must work, not trap), Za64rs/Zic64b size constraints, Zfhmin half-precisi
 Svade/Svpbmt/Svinval/Sstvecd/Sstvala behavioural set. The last group is the easiest to miss and
 the hardest to prove.
 
-## Local toolchain inventory (verified 2026-09-24)
+## Toolchain inventory (verified 2026-09-24)
 
-| Path | What it gives us |
+| Variable | What it gives us |
 |---|---|
-| `/home/aelix/tools/riscv-tests` | Per-slice `-p-` corpora with `.dump` files — the working oracle |
-| `/home/aelix/tools/riscv-arch-test` | Certification test plans, coverpoints, Spike/SAIL/Imperas configs |
-| `/home/aelix/tools/opensbi` | M-mode firmware source for the S9 boot path |
-| `/home/aelix/tools/riscv-gnu-toolchain` | Compiler and binutils |
+| `$RISCV_TESTS_DIR` | Per-slice `-p-` test sets with `.dump` files — the working reference |
+| `$RISCV_ARCH_TEST_DIR` | Certification test plans, coverpoints, Spike/SAIL/Imperas configs |
+| `$OPENSBI_DIR` | M-mode firmware source for the S9 boot path |
+| `$RISCV_TOOLCHAIN_DIR` | Compiler and binutils |
 
 ## Verification strategy
 

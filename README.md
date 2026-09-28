@@ -13,21 +13,23 @@ difference is a failure.
 
 ## Reference simulator
 
-Pinned invocation, verified 2026-09-24 on `rv64ui-p-add` (12064 log lines, exit 0):
+Pinned invocation, verified 2026-09-24 on `rv64ui-p-add` (12064 log lines, exit 0). `spike`
+resolves through `$SPIKE`, or through `PATH` when that is unset:
 
-    /opt/riscv/bin/spike \
+    spike \
       --isa=rv64imafdc_zicsr_zifencei_zicntr_zihpm_zicclsm_zihintpause_zicbom_zicboz_zicbop_zca_zcd_zba_zbb_zbs_zfhmin_zaamo_zalrsc_svade_svpbmt_svinval \
       --priv=msu -l --log-commits --log=<ref>.log <binary>
 
 Build identity: `Spike RISC-V ISA Simulator 1.1.1-dev`, `riscv-isa-sim.git` at `8fc5ab03`.
 
-## Local tooling
+## Tooling you supply
 
-| Location | What it provides |
+| Variable | What to point it at |
 |---|---|
-| `/home/aelix/tools/riscv-tests` | Per-slice `rv64*-p-*` corpora — the working reference |
-| `/home/aelix/tools/riscv-arch-test` | RVA22S64 certification test plans and coverpoints |
-| `/home/aelix/tools/opensbi` | M-mode firmware source for the boot phase |
+| `$RISCV_TESTS_DIR` | a `riscv-tests` checkout — per-slice `rv64*-p-*` test sets, the working reference |
+| `$RISCV_ARCH_TEST_DIR` | a `riscv-arch-test` checkout — RVA22S64 certification plans and coverpoints |
+| `$OPENSBI_DIR` | an `opensbi` checkout — M-mode firmware source for the boot phase |
+| `$RISCV_TOOLCHAIN_DIR` | a RISC-V GNU toolchain — compiler and binutils |
 
 ## Where things live
 

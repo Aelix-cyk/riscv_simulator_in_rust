@@ -35,7 +35,7 @@ not assumed. The raw measurement is reproducible with the command in §2.
 
 ## 1. Test set and the gate
 
-71 binaries from `/home/aelix/tools/riscv-tests/isa`: 54 `rv64ui-p-*`, 17 `rv64mi-p-*`.
+71 binaries from `$RISCV_TESTS_DIR/isa`: 54 `rv64ui-p-*`, 17 `rv64mi-p-*`.
 
 A binary passes when, after the normalization in §5, the simulator's record sequence equals
 Spike's and its exit status equals Spike's. S1 is accepted when all 71 pass twice in a row, run as
@@ -45,7 +45,7 @@ Trace equality is necessary, not sufficient: §7 lists what this gate cannot see
 
 ## 2. Oracle, pinned
 
-    /opt/riscv/bin/spike \
+    spike \
       --isa=rv64imafdc_zicsr_zifencei_zicntr_zihpm_zicclsm_zihintpause_zicbom_zicboz_zicbop_zca_zcd_zba_zbb_zbs_zfhmin_zaamo_zalrsc_svade_svpbmt_svinval \
       --priv=msu --triggers=0 -l --log-commits --log=<ref>.log <binary>
 

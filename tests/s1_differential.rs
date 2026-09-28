@@ -6,9 +6,10 @@
 //!
 //!     cargo test --test s1_differential -- --ignored --test-threads=1
 //!
-//! The unit tests at the end of this file are *not* ignored: they exercise the normalizer and the
-//! ELF symbol reader, which ADR 006 flags as trusted code. They need neither oracle nor test set,
-//! so they belong in the ordinary suite.
+//! The unit tests at the end of this file are *not* ignored: they exercise the normalizer, which
+//! ADR 006 flags as trusted code, and they need neither oracle nor test set. The one exception is
+//! the symbol reader, which reads a real test binary and is therefore `#[ignore]`d — the ordinary
+//! suite stays runnable in a bare checkout with no environment configured.
 //!
 //! Shape, per `docs/verification/s1-harness-design.md`: spike and the simulator are both driven as
 //! subprocesses, black box, through the frozen CLI. Nothing here reaches into `src/**`.
@@ -21,14 +22,29 @@ use std::time::{Duration, Instant};
 
 // --- the pinned configuration -------------------------------------------------------------
 
-const SPIKE: &str = "/opt/riscv/bin/spike";
 const SPIKE_BUILD: &str = "Spike RISC-V ISA Simulator 1.1.1-dev, riscv-isa-sim.git @ 8fc5ab03";
 const ISA: &str = "rv64imafdc_zicsr_zifencei_zicntr_zihpm_zicclsm_zihintpause_zicbom_zicboz_zicbop_zca_zcd_zba_zbb_zbs_zfhmin_zaamo_zalrsc_svade_svpbmt_svinval";
 const PRIV: &str = "msu";
-const TEST_SET_DIR: &str = "/home/aelix/tools/riscv-tests/isa";
 const EXPECTED_TEST_SET: usize = 71;
 const ORACLE_TIMEOUT: Duration = Duration::from_secs(120);
 const SIMULATOR_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The oracle binary: `$SPIKE`, falling back to `spike` on `PATH`.
+fn spike() -> String {
+    std::env::var("SPIKE").unwrap_or_else(|_| "spike".to_string())
+}
+
+/// The test set lives in `$RISCV_TESTS_DIR/isa`. There is no default on purpose: a wrong
+/// environment fails loudly instead of quietly testing the wrong binaries.
+fn test_set_dir() -> PathBuf {
+    let root = std::env::var("RISCV_TESTS_DIR").unwrap_or_else(|_| {
+        panic!(
+            "RISCV_TESTS_DIR is not set: point it at a riscv-tests checkout, the directory that \
+             contains isa/"
+        )
+    });
+    Path::new(&root).join("isa")
+}
 
 /// Spike commits five instructions of its own boot ROM before the ELF entry point. Records below
 /// this address belong to the ROM and are dropped (surface §5, rule 2).
@@ -43,8 +59,13 @@ fn scratch_dir() -> PathBuf {
 }
 
 fn test_set() -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(TEST_SET_DIR)
-        .unwrap_or_else(|e| panic!("cannot read the test set directory {TEST_SET_DIR}: {e}"))
+    let mut names: Vec<String> = fs::read_dir(test_set_dir())
+        .unwrap_or_else(|e| {
+            panic!(
+                "cannot read the test set directory {}: {e}",
+                test_set_dir().display()
+            )
+        })
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().map(|kind| kind.is_file()).unwrap_or(false))
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
@@ -104,7 +125,7 @@ fn run_captured(
 }
 
 fn spike_command(elf: &Path, log: &Path) -> Command {
-    let mut cmd = Command::new(SPIKE);
+    let mut cmd = Command::new(spike());
     cmd.arg(format!("--isa={ISA}"))
         .arg(format!("--priv={PRIV}"))
         .arg("--triggers=0")
@@ -131,9 +152,10 @@ fn simulator_command(elf: &Path) -> Command {
 fn describe_config(elf: &Path, log: &Path) -> String {
     format!(
         "pinned configuration (surface §2):\n  \
-         {SPIKE} --isa={ISA} --priv={PRIV} --triggers=0 -l --log-commits --log={} {}\n  \
+         {} --isa={ISA} --priv={PRIV} --triggers=0 -l --log-commits --log={} {}\n  \
          {SPIKE_BUILD}\n  \
          simulator: cargo run --release -- {} --trace",
+        spike(),
         log.display(),
         elf.display(),
         elf.display()
@@ -504,7 +526,7 @@ fn divergence_message(
 }
 
 fn differential(binary: &str) {
-    let elf = Path::new(TEST_SET_DIR).join(binary);
+    let elf = test_set_dir().join(binary);
     assert!(elf.is_file(), "test binary not found: {}", elf.display());
 
     let scratch = scratch_dir();
@@ -691,7 +713,7 @@ fn determinism_full_test_set_twice() {
     for pass in 0..2 {
         let mut stream = Vec::new();
         for binary in test_set() {
-            let elf = Path::new(TEST_SET_DIR).join(&binary);
+            let elf = test_set_dir().join(&binary);
             let run = run_captured(
                 &mut simulator_command(&elf),
                 SIMULATOR_TIMEOUT,
@@ -720,7 +742,7 @@ fn determinism_full_test_set_twice() {
 #[ignore = "the differential step: run with --ignored"]
 fn differ_self_check_rv64ui_p_add() {
     let scratch = scratch_dir();
-    let elf = Path::new(TEST_SET_DIR).join("rv64ui-p-add");
+    let elf = test_set_dir().join("rv64ui-p-add");
     let log_path = scratch.join("rv64ui-p-add.selfcheck.log");
     let oracle = run_captured(
         &mut spike_command(&elf, &log_path),
@@ -924,10 +946,13 @@ fn normalizer_rewrites_fields() {
     }
 }
 
+/// Reads a real test binary, so it needs `$RISCV_TESTS_DIR`; the implementer's M1 loader sweep
+/// covers the same path in the ordinary suite, over all 71 images.
 #[test]
+#[ignore = "needs $RISCV_TESTS_DIR; run with the differential step"]
 fn tohost_is_read_from_the_symbol_table_not_hardcoded() {
     let address = |binary: &str| {
-        tohost_address(&Path::new(TEST_SET_DIR).join(binary)).expect("the tohost symbol")
+        tohost_address(&test_set_dir().join(binary)).expect("the tohost symbol")
     };
     assert_eq!(address("rv64ui-p-add"), 0x8000_1000);
     assert_eq!(address("rv64ui-p-ld_st"), 0x8000_2000);

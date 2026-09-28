@@ -29,7 +29,7 @@ third option: silently widening a normalization.
 
 ## Oracle configuration
 
-    /opt/riscv/bin/spike \
+    spike \
       --isa=rv64imafdc_zicsr_zifencei_zicntr_zihpm_zicclsm_zihintpause_zicbom_zicboz_zicbop_zca_zcd_zba_zbb_zbs_zfhmin_zaamo_zalrsc_svade_svpbmt_svinval \
       --priv=msu --triggers=0 -l --log-commits --log=<ref>.log <binary>
 

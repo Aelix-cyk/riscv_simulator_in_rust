@@ -28,13 +28,13 @@ is measured.
 that runs 71 times turns a two-second step into a slow one and muddies which binary was under test
 when something failed.
 
-**P2 — Enumerate the test set.** Glob `/home/aelix/tools/riscv-tests/isa/rv64ui-p-*` and
+**P2 — Enumerate the test set.** Glob `$RISCV_TESTS_DIR/isa/rv64ui-p-*` and
 `rv64mi-p-*`, dropping the `.dump` companions (54 + 17 = 71 binaries; the raw glob returns 142
 entries). The list is data, not code: a test set that shrinks silently is worse than a red test.
 
 **P3 — Run the oracle.**
 
-    /opt/riscv/bin/spike --isa=<pinned> --priv=msu --triggers=0 -l --log-commits \
+    spike --isa=<pinned> --priv=msu --triggers=0 -l --log-commits \
         --log=<tmp>/<binary>.log <binary>
 
 Fail the test if spike is missing or exits nonzero, and keep its exit status — comparing it is the

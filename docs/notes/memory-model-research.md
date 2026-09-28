@@ -30,8 +30,8 @@ centre is many devices and many address spaces; nothing in it is tuned for one f
 
 ## 3. Measurement — what each access path costs
 
-Micro-benchmark, 20M 8-byte reads, random addresses across a 1 MiB window, `rustc -O`, this
-machine, 2026-09-28:
+Micro-benchmark, 20M 8-byte reads, random addresses across a 1 MiB window, `rustc -O`, on the
+development machine, 2026-09-28:
 
 | Access path | ns/access |
 |---|---|
