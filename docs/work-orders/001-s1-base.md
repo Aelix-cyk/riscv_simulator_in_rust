@@ -86,6 +86,30 @@ Permission granted 2026-09-27 by the architect: the assistant may re-point the r
 harness review in `docs/verification/s1-harness-design.md` §10 at the audit index, since the note
 it named was removed. Expires when this work order is accepted.
 
+## Method approved — M1, 2026-09-27
+
+The architect approved **M1 (skeleton: CLI, ELF loader, sparse 4 KiB page memory, halt protocol)**.
+The implementer may write `src/**` for M1 and nothing further.
+
+M1's acceptance is not a green harness: the differential step stays red until M5, and a red run
+during M1 is the expected state, not a defect. M1 is done when:
+
+- `cargo build --release` is clean and the unit suite is green;
+- the CLI resolves its arguments, and a missing path or a non-ELF file exits 2 with one stderr
+  line and nothing on stdout;
+- all 71 test-set images load, with a unit test asserting each `PT_LOAD` segment lands where the
+  ELF says and each `tohost` symbol is found (69 at `0x80001000`, two at `0x80002000`);
+- memory unit tests cover page allocation, misaligned reads and writes, and unmapped access
+  returning a fault rather than panicking.
+
+Scope fence: no decoder, no CSR table, no instruction semantics, and no execution loop in M1.
+Those are M2–M4, and each needs its own approval before it is written.
+
+Method specification signed off 2026-09-28: `docs/work-orders/001-m1-skeleton.md` is the M1
+specification, approved section by section. Its §9 obligation 6 — process-level CLI checks with no
+oracle and no trace — is the verifier's, and can go green during M1 while the differential step
+stays red.
+
 ## Evidence
 
 - Implementer: files touched, commands run, failures seen, one line per method. May run the
