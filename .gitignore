@@ -27,3 +27,8 @@ rustc-ice-*.txt
 # Added by cargo
 
 /target
+
+# Reference documents, not tracked
+/riscv-debug-specification.pdf
+/riscv-spec.html
+/rva22s64-implementation-choices-template.md
