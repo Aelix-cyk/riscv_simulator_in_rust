@@ -6,8 +6,9 @@ category and listed alphabetically within each section.
 ## Foundations & Formats
 
 - **ABI name** — The conventional mnemonic (e.g. `sp`, `ra`, `a0`) used for a register by the standard calling convention instead of its `x`-number.
-- **Base ISA** — The mandatory integer instruction set of RISC-V; for this project, RV32I.
+- **Base ISA** — The mandatory integer instruction set of RISC-V; for this project, RV64I.
 - **Byte** — An 8-bit value, the smallest addressable unit of memory.
+- **Doubleword** — A 64-bit value, eight consecutive bytes.
 - **Extension** — An optional named set of instructions added on top of the base ISA, such as M, A, F, D, or C.
 - **funct3** — A 3-bit field in most instruction encodings that selects the specific operation within an opcode.
 - **funct7** — A 7-bit field that further distinguishes R-type operations sharing an opcode and funct3.
@@ -19,19 +20,21 @@ category and listed alphabetically within each section.
 - **Opcode** — The field in an instruction that identifies the broad operation class.
 - **Program counter (PC)** — The register holding the address of the instruction currently being executed.
 - **Pseudo-instruction** — An assembly mnemonic that assemblers translate into one or more real instructions, e.g. `nop` for `addi x0, x0, 0`.
-- **Register** — A small, fast, named storage location inside the CPU; RV32I has 32 general-purpose registers.
+- **Register** — A small, fast, named storage location inside the CPU; RV64I has 32 general-purpose registers.
 - **Register file** — The collection of all registers a hart can read and write directly.
 - **RISC-V** — An open, modular, royalty-free instruction set architecture.
-- **RV32I** — The 32-bit base integer ISA, the minimal instruction set this simulator targets.
+- **RV64I** — The 64-bit base integer ISA, the minimal instruction set this simulator targets, extended by the RVA22S64 profile.
 - **Sign-extension** — Widening a value by filling the new high bits with copies of its sign bit, preserving its two's-complement value.
 - **Word** — A 32-bit value, four consecutive bytes.
 - **x0** — The first integer register, hardwired to zero; writes are ignored and reads always yield 0.
-- **XLEN** — The width of the integer registers and address space, 32 for RV32.
+- **XLEN** — The width of the integer registers and address space, 64 for RV64.
 
-## RV32I Base Integer Instructions
+## RV64I Base Integer Instructions
 
 - **ADD / SUB** — Register-register integer addition and subtraction.
 - **ADDI** — Add an immediate value to a register.
+- **ADDIW** — Add an immediate to a register and sign-extend the low 32 bits of the result.
+- **ADDW / SUBW** — 32-bit addition and subtraction whose results are sign-extended to 64 bits.
 - **AND / ANDI, OR / ORI, XOR / XORI** — Bitwise logical AND, OR, and XOR, in register and immediate forms.
 - **AUIPC** — Add an immediate to the PC and store the result, used for PC-relative addressing.
 - **BEQ / BNE** — Branch if two registers are equal, or not equal.
@@ -42,10 +45,11 @@ category and listed alphabetically within each section.
 - **FENCE** — A memory-ordering instruction that constrains how loads and stores from other harts are observed.
 - **JAL** — Jump and link: performs a PC-relative jump and writes the return address to a register.
 - **JALR** — Jump and link register: jumps to a register plus immediate and writes the return address.
-- **Load instructions (LB, LH, LW, LBU, LHU)** — Load a byte, halfword, or word from memory with signed or unsigned extension.
+- **Load instructions (LB, LH, LW, LD, LBU, LHU, LWU)** — Load a byte, halfword, word, or doubleword from memory with signed or unsigned extension.
 - **LUI** — Load upper immediate: places a 20-bit constant into the top of a register.
-- **Store instructions (SB, SH, SW)** — Write a byte, halfword, or word to memory.
+- **Store instructions (SB, SH, SW, SD)** — Write a byte, halfword, word, or doubleword to memory.
 - **Shift instructions (SLL, SRL, SRA and immediate forms)** — Logical-left, logical-right, and arithmetic-right shifts.
+- **Shift-word instructions (SLLW, SRLW, SRAW and immediate forms)** — Shifts that operate on the low 32 bits and sign-extend the result.
 - **SLT / SLTU, SLTI / SLTIU** — Set a register to 1 if the first operand is less than the second, in signed or unsigned and register or immediate form.
 
 ## Standard Extensions

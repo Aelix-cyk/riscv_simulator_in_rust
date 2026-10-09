@@ -32,3 +32,6 @@ rustc-ice-*.txt
 /riscv-debug-specification.pdf
 /riscv-spec.html
 /rva22s64-implementation-choices-template.md
+
+# Working notes, not tracked
+/docs/notes/
