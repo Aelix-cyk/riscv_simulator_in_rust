@@ -7,7 +7,7 @@ use crate::trap::Trap;
 pub const DRAM_BASE: u64 = 0x8000_0000;
 
 /// Size of main memory in bytes.
-pub const DRAM_SIZE: usize = 1 << 20;
+pub const DRAM_SIZE: u64 = 1 << 20;
 
 /// A flat byte array spanning `DRAM_BASE .. DRAM_BASE + DRAM_SIZE`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +18,8 @@ pub struct Memory {
 impl Memory {
     /// Creates zeroed main memory.
     pub fn new() -> Self {
-        Self::with_size(DRAM_SIZE)
+        // 64-bit machines only: `usize` is 64 bits wide, so this cannot truncate.
+        Self::with_size(DRAM_SIZE as usize)
     }
 
     /// Creates zeroed memory of `size` bytes, still based at `DRAM_BASE`.
@@ -37,7 +38,9 @@ impl Memory {
         if end > self.bytes.len() as u64 {
             return Err(Trap::AccessFault);
         }
-        usize::try_from(offset).map_err(|_| Trap::AccessFault)
+        // The bounds check above keeps `offset` within the host address space,
+        // so the cast cannot truncate on 64-bit machines.
+        Ok(offset as usize)
     }
 
     /// Reads `N` bytes little-endian, already in memory order.
@@ -107,7 +110,7 @@ impl Bus for Memory {
 mod tests {
     use super::*;
 
-    const LAST_BYTE: u64 = DRAM_BASE + DRAM_SIZE as u64 - 1;
+    const LAST_BYTE: u64 = DRAM_BASE + DRAM_SIZE - 1;
 
     #[test]
     fn byte_round_trips() {

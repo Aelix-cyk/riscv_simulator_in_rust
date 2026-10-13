@@ -37,8 +37,8 @@ pub trait Bus {
     /// The default writes byte by byte and may leave a partial image when a write
     /// faults partway through.
     fn load_image(&mut self, address: u64, bytes: &[u8]) -> Result<(), Trap> {
-        for (offset, byte) in bytes.iter().enumerate() {
-            self.write_u8(offset_address(address, offset)?, *byte)?;
+        for (index, byte) in bytes.iter().enumerate() {
+            self.write_u8(offset_address(address, index as u64)?, *byte)?;
         }
         Ok(())
     }
@@ -47,8 +47,8 @@ pub trait Bus {
 /// Reads `N` bytes through [`Bus::read_u8`].
 fn read_le<B: Bus + ?Sized, const N: usize>(bus: &mut B, address: u64) -> Result<[u8; N], Trap> {
     let mut bytes = [0; N];
-    for (offset, byte) in bytes.iter_mut().enumerate() {
-        *byte = bus.read_u8(offset_address(address, offset)?)?;
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = bus.read_u8(offset_address(address, index as u64)?)?;
     }
     Ok(bytes)
 }
@@ -59,15 +59,14 @@ fn write_le<B: Bus + ?Sized, const N: usize>(
     address: u64,
     bytes: [u8; N],
 ) -> Result<(), Trap> {
-    for (offset, byte) in bytes.iter().enumerate() {
-        bus.write_u8(offset_address(address, offset)?, *byte)?;
+    for (index, byte) in bytes.iter().enumerate() {
+        bus.write_u8(offset_address(address, index as u64)?, *byte)?;
     }
     Ok(())
 }
 
 /// Adds a byte offset to an address, faulting on overflow.
-fn offset_address(address: u64, offset: usize) -> Result<u64, Trap> {
-    let offset = u64::try_from(offset).map_err(|_| Trap::AccessFault)?;
+fn offset_address(address: u64, offset: u64) -> Result<u64, Trap> {
     address.checked_add(offset).ok_or(Trap::AccessFault)
 }
 
@@ -90,20 +89,21 @@ mod tests {
             }
         }
 
-        fn index(address: u64) -> Result<usize, Trap> {
-            usize::try_from(address).map_err(|_| Trap::AccessFault)
+        fn index(address: u64) -> usize {
+            // 64-bit machines only: the cast cannot truncate.
+            address as usize
         }
     }
 
     impl Bus for TinyDevice {
         fn read_u8(&mut self, address: u64) -> Result<u8, Trap> {
-            let index = Self::index(address)?;
+            let index = Self::index(address);
             self.reads += 1;
             self.bytes.get(index).copied().ok_or(Trap::AccessFault)
         }
 
         fn write_u8(&mut self, address: u64, value: u8) -> Result<(), Trap> {
-            let index = Self::index(address)?;
+            let index = Self::index(address);
             *self.bytes.get_mut(index).ok_or(Trap::AccessFault)? = value;
             Ok(())
         }
