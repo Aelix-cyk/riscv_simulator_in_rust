@@ -132,6 +132,17 @@ mod tests {
     }
 
     #[test]
+    fn default_16_and_32_bit_writes_are_little_endian() {
+        let mut device = TinyDevice::new();
+
+        device.write_u16(2, 0x1234).unwrap();
+        device.write_u32(4, 0xdead_beef).unwrap();
+
+        assert_eq!(device.bytes[2..4], [0x34, 0x12]);
+        assert_eq!(device.bytes[4..8], [0xef, 0xbe, 0xad, 0xde]);
+    }
+
+    #[test]
     fn default_wide_reads_go_through_read_u8() {
         let mut device = TinyDevice::new();
 

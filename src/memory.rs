@@ -227,6 +227,11 @@ mod tests {
     }
 
     #[test]
+    fn default_matches_new() {
+        assert_eq!(Memory::default(), Memory::new());
+    }
+
+    #[test]
     fn memory_is_usable_as_a_dyn_bus() {
         let mut memory = Memory::new();
         let bus: &mut dyn Bus = &mut memory;

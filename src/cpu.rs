@@ -105,4 +105,9 @@ mod tests {
 
         assert_eq!(cpu.pc(), 0x8000_0000);
     }
+
+    #[test]
+    fn default_matches_new() {
+        assert_eq!(Cpu::default(), Cpu::new());
+    }
 }
