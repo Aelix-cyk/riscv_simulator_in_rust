@@ -3,5 +3,6 @@
 pub mod bus;
 pub mod cpu;
 pub mod decode;
+pub mod machine;
 pub mod memory;
 pub mod trap;
