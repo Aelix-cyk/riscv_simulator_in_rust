@@ -2,7 +2,9 @@
 # Used by tests/decode.rs and the integration test in tests/loop_run.rs.
 	.text
 	.globl _start
+	.include "clear-registers.inc"
 _start:
+	clear_gprs
 	addi	a0, zero, 0          # sum
 	addi	a1, zero, 1          # i
 	addi	a2, zero, 11         # limit

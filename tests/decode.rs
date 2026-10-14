@@ -56,7 +56,7 @@ fn decoder_sign_extends_immediates_and_rejects_illegal_words() {
             }
             riscv_simulator_in_rust::decode::Instruction::Beq { offset, .. }
             | riscv_simulator_in_rust::decode::Instruction::Jal { offset, .. } => {
-                let target = objdump_target(&expected.operands);
+                let target = assemble::branch_target(&expected.operands);
                 assert_eq!(
                     address.wrapping_add_signed(offset),
                     target,
@@ -68,13 +68,6 @@ fn decoder_sign_extends_immediates_and_rejects_illegal_words() {
     }
 
     assert_eq!(immediates, vec![-1, -2048]);
-}
-
-/// Reads the branch target `objdump` prints, e.g. `80000000 <_start>`.
-fn objdump_target(operands: &str) -> u64 {
-    let last = operands.split(',').next_back().expect("target operand");
-    let hex = last.split_whitespace().next().expect("target address");
-    u64::from_str_radix(hex, 16).expect("hex target")
 }
 
 /// Reads a register number from an `x`-name, e.g. `x10` -> 10.
@@ -136,7 +129,7 @@ fn decoder_reports_exact_register_fields() {
                 assert_eq!((rs1, rs2), (register(operands[0]), register(operands[1])));
                 assert_eq!(
                     address.wrapping_add_signed(offset),
-                    objdump_target(&line.operands)
+                    assemble::branch_target(&line.operands)
                 );
             }
             Instruction::Jal { rd, offset } => {
@@ -144,7 +137,7 @@ fn decoder_reports_exact_register_fields() {
                 assert_eq!(rd, register(operands[0]));
                 assert_eq!(
                     address.wrapping_add_signed(offset),
-                    objdump_target(&line.operands)
+                    assemble::branch_target(&line.operands)
                 );
             }
         }
