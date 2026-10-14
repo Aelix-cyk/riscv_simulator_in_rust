@@ -98,7 +98,7 @@ impl Bus for Memory {
         self.write_bytes::<8>(address, value.to_le_bytes())
     }
 
-    fn load_image(&mut self, address: u64, bytes: &[u8]) -> Result<(), Trap> {
+    fn load_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<(), Trap> {
         // Check the whole span before copying so a fault leaves memory untouched.
         let offset = self.offset(address, bytes.len() as u64)?;
         self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
@@ -164,11 +164,11 @@ mod tests {
     }
 
     #[test]
-    fn load_image_then_read() {
+    fn load_bytes_then_read() {
         let mut memory = Memory::new();
 
         memory
-            .load_image(DRAM_BASE, &[0x13, 0x05, 0x10, 0x00])
+            .load_bytes(DRAM_BASE, &[0x13, 0x05, 0x10, 0x00])
             .unwrap();
 
         assert_eq!(memory.read_u32(DRAM_BASE).unwrap(), 0x0010_0513);
@@ -199,11 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn load_image_beyond_end_faults() {
+    fn load_bytes_beyond_end_faults() {
         let mut memory = Memory::new();
 
         assert_eq!(
-            memory.load_image(LAST_BYTE, &[0, 1]),
+            memory.load_bytes(LAST_BYTE, &[0, 1]),
             Err(Trap::AccessFault)
         );
     }

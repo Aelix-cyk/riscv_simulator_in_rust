@@ -1,5 +1,6 @@
 //! Instruction decoding for the instructions the walking skeleton executes.
 
+use crate::cpu::abi_name;
 use crate::trap::Trap;
 
 /// Opcodes of the instructions understood so far.
@@ -38,6 +39,37 @@ impl Instruction {
             Instruction::Beq { .. } => "beq",
             Instruction::Jal { .. } => "jal",
         }
+    }
+
+    /// Renders the instruction the way the trace prints it: ABI register names,
+    /// decimal immediates, and a PC-relative target for control transfers.
+    pub fn render(&self) -> String {
+        match *self {
+            Instruction::Addi { rd, rs1, imm } => {
+                format!("addi {},{},{imm}", abi_name(rd), abi_name(rs1))
+            }
+            Instruction::Add { rd, rs1, rs2 } => {
+                format!("add {},{},{}", abi_name(rd), abi_name(rs1), abi_name(rs2))
+            }
+            Instruction::Beq { rs1, rs2, offset } => format!(
+                "beq {},{},{}",
+                abi_name(rs1),
+                abi_name(rs2),
+                relative(offset)
+            ),
+            Instruction::Jal { rd, offset } => {
+                format!("jal {},{}", abi_name(rd), relative(offset))
+            }
+        }
+    }
+}
+
+/// Formats a PC-relative offset the way the trace prints it.
+fn relative(offset: i64) -> String {
+    if offset < 0 {
+        format!("pc - {:#x}", offset.unsigned_abs())
+    } else {
+        format!("pc + {offset:#x}")
     }
 }
 

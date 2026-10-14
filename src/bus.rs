@@ -36,7 +36,7 @@ pub trait Bus {
     ///
     /// The default writes byte by byte and may leave a partial image when a write
     /// faults partway through.
-    fn load_image(&mut self, address: u64, bytes: &[u8]) -> Result<(), Trap> {
+    fn load_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<(), Trap> {
         for (index, byte) in bytes.iter().enumerate() {
             self.write_u8(offset_address(address, index as u64)?, *byte)?;
         }
@@ -152,10 +152,10 @@ mod tests {
     }
 
     #[test]
-    fn default_load_image_then_read() {
+    fn default_load_bytes_then_read() {
         let mut device = TinyDevice::new();
 
-        device.load_image(0, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+        device.load_bytes(0, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
 
         assert_eq!(device.read_u32(0).unwrap(), 0xddcc_bbaa);
     }
@@ -166,6 +166,6 @@ mod tests {
 
         assert_eq!(device.read_u32(6), Err(Trap::AccessFault));
         assert_eq!(device.write_u64(4, 0), Err(Trap::AccessFault));
-        assert_eq!(device.load_image(7, &[0, 1]), Err(Trap::AccessFault));
+        assert_eq!(device.load_bytes(7, &[0, 1]), Err(Trap::AccessFault));
     }
 }

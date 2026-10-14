@@ -59,9 +59,14 @@ impl<B: Bus> Machine<B> {
         self.halted
     }
 
+    /// Fetches and decodes the instruction at the PC, without executing it.
+    pub fn fetch(&mut self) -> Result<Instruction, Trap> {
+        decode(self.bus.read_u32(self.cpu.pc())?)
+    }
+
     /// Fetches, decodes, and executes the instruction at the PC.
     pub fn step(&mut self) -> Result<(), Trap> {
-        let instruction = decode(self.bus.read_u32(self.cpu.pc())?)?;
+        let instruction = self.fetch()?;
         self.execute(instruction)
     }
 
@@ -76,8 +81,8 @@ impl<B: Bus> Machine<B> {
         Ok(RunOutcome::StepLimitReached)
     }
 
-    /// Executes one already-decoded instruction.
-    fn execute(&mut self, instruction: Instruction) -> Result<(), Trap> {
+    /// Executes one already-fetched instruction, for callers that trace them.
+    pub fn execute(&mut self, instruction: Instruction) -> Result<(), Trap> {
         let pc = self.cpu.pc();
 
         match instruction {

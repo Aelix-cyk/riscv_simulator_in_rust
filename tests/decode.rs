@@ -12,13 +12,13 @@ use riscv_simulator_in_rust::trap::Trap;
 fn decoder_agrees_with_objdump_on_every_loop_instruction() {
     let program = assemble::assemble("loop.S");
     assert_eq!(
-        program.image.len(),
+        program.binary.len(),
         program.instructions.len() * 4,
-        "image has bytes beyond the instruction stream; check for a section gap"
+        "binary has bytes beyond the instruction stream; check for a section gap"
     );
 
-    let mut memory = Memory::with_size(program.image.len());
-    memory.load_image(DRAM_BASE, &program.image).unwrap();
+    let mut memory = Memory::with_size(program.binary.len());
+    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
 
     for (index, expected) in program.instructions.iter().enumerate() {
         let address = DRAM_BASE + index as u64 * 4;
@@ -33,8 +33,8 @@ fn decoder_agrees_with_objdump_on_every_loop_instruction() {
 #[test]
 fn decoder_sign_extends_immediates_and_rejects_illegal_words() {
     let program = assemble::assemble("edges.S");
-    let mut memory = Memory::with_size(program.image.len());
-    memory.load_image(DRAM_BASE, &program.image).unwrap();
+    let mut memory = Memory::with_size(program.binary.len());
+    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
 
     let mut immediates = Vec::new();
     for (index, expected) in program.instructions.iter().enumerate() {
@@ -70,14 +70,16 @@ fn decoder_sign_extends_immediates_and_rejects_illegal_words() {
     assert_eq!(immediates, vec![-1, -2048]);
 }
 
-/// Reads a register number from an `x`-name, e.g. `x10` -> 10.
+/// Reads a register number from an ABI name or an `x`-name, e.g. `a0` or `x10`.
 fn register(token: &str) -> u8 {
-    token
-        .trim()
-        .strip_prefix('x')
-        .expect("numeric register name")
-        .parse()
-        .expect("register number")
+    let token = token.trim();
+    if let Some(number) = token.strip_prefix('x') {
+        return number.parse().expect("register number");
+    }
+    riscv_simulator_in_rust::cpu::ABI_NAMES
+        .iter()
+        .position(|name| *name == token)
+        .expect("ABI register name") as u8
 }
 
 /// Splits `objdump` operand text, e.g. `x5,x6,7`.
@@ -85,11 +87,11 @@ fn operands(line: &assemble::Disassembled) -> Vec<&str> {
     line.operands.split(',').map(str::trim).collect()
 }
 
-/// Builds memory holding the given fixture's image.
+/// Builds memory holding the given fixture's binary.
 fn fixture_memory(name: &str) -> (assemble::Program, Memory) {
     let program = assemble::assemble(name);
-    let mut memory = Memory::with_size(program.image.len());
-    memory.load_image(DRAM_BASE, &program.image).unwrap();
+    let mut memory = Memory::with_size(program.binary.len());
+    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
     (program, memory)
 }
 

@@ -10,11 +10,11 @@ use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 #[test]
 fn loop_fixture_halts_with_spike_state() {
     let program = assemble::assemble("loop.S");
-    let mut machine = Machine::new(Memory::with_size(program.image.len()));
+    let mut machine = Machine::new(Memory::with_size(program.binary.len()));
     machine.cpu_mut().set_pc(assemble::LOAD_ADDRESS);
     machine
         .bus_mut()
-        .load_image(DRAM_BASE, &program.image)
+        .load_bytes(DRAM_BASE, &program.binary)
         .unwrap();
 
     let outcome = machine.run(1_000).unwrap();
@@ -31,11 +31,11 @@ fn loop_fixture_halts_with_spike_state() {
 #[test]
 fn spin_fixture_stops_at_the_step_limit() {
     let program = assemble::assemble("spin.S");
-    let mut machine = Machine::new(Memory::with_size(program.image.len()));
+    let mut machine = Machine::new(Memory::with_size(program.binary.len()));
     machine.cpu_mut().set_pc(assemble::LOAD_ADDRESS);
     machine
         .bus_mut()
-        .load_image(DRAM_BASE, &program.image)
+        .load_bytes(DRAM_BASE, &program.binary)
         .unwrap();
 
     assert_eq!(machine.run(3).unwrap(), RunOutcome::StepLimitReached);

@@ -6,6 +6,18 @@ pub const GPR_COUNT: usize = 32;
 /// Index of the hardwired zero register, `x0`.
 pub const X0: usize = 0;
 
+/// ABI names of the general-purpose registers, indexed by register number.
+pub const ABI_NAMES: [&str; GPR_COUNT] = [
+    "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4",
+    "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4",
+    "t5", "t6",
+];
+
+/// ABI name of general-purpose register `index`.
+pub fn abi_name(index: u8) -> &'static str {
+    ABI_NAMES[usize::from(index)]
+}
+
 /// General-purpose register file and program counter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cpu {

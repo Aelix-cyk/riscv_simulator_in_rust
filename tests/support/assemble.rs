@@ -11,15 +11,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use riscv_simulator_in_rust::cpu::GPR_COUNT;
+use riscv_simulator_in_rust::cpu::{ABI_NAMES, GPR_COUNT};
 
 /// Address fixtures are linked at and loaded into memory.
 pub const LOAD_ADDRESS: u64 = 0x8000_0000;
 
-/// A flat image plus the toolchain's own disassembly of it.
+/// A flat binary plus the toolchain's own disassembly of it.
 pub struct Program {
     /// Bytes of the loadable text, in memory order.
-    pub image: Vec<u8>,
+    pub binary: Vec<u8>,
     /// One entry per instruction, in the order `objdump` lists them.
     pub instructions: Vec<Disassembled>,
     work_dir: PathBuf,
@@ -39,42 +39,6 @@ pub struct Disassembled {
 }
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// The ABI names spike prints, mapped to `x`-register numbers.
-const ABI_NAMES: [(&str, usize); GPR_COUNT] = [
-    ("zero", 0),
-    ("ra", 1),
-    ("sp", 2),
-    ("gp", 3),
-    ("tp", 4),
-    ("t0", 5),
-    ("t1", 6),
-    ("t2", 7),
-    ("s0", 8),
-    ("s1", 9),
-    ("a0", 10),
-    ("a1", 11),
-    ("a2", 12),
-    ("a3", 13),
-    ("a4", 14),
-    ("a5", 15),
-    ("a6", 16),
-    ("a7", 17),
-    ("s2", 18),
-    ("s3", 19),
-    ("s4", 20),
-    ("s5", 21),
-    ("s6", 22),
-    ("s7", 23),
-    ("s8", 24),
-    ("s9", 25),
-    ("s10", 26),
-    ("s11", 27),
-    ("t3", 28),
-    ("t4", 29),
-    ("t5", 30),
-    ("t6", 31),
-];
 
 impl Program {
     /// Address of the halt self-loop, `jal x0, 0`.
@@ -114,7 +78,7 @@ impl Drop for Program {
     }
 }
 
-/// Assembles `tests/fixtures/<name>` and returns its image and disassembly.
+/// Assembles `tests/fixtures/<name>` and returns its binary and disassembly.
 pub fn assemble(name: &str) -> Program {
     let work_dir = std::env::temp_dir().join(format!(
         "arvsr-{}-{}",
@@ -129,7 +93,7 @@ pub fn assemble(name: &str) -> Program {
     let source = fixtures.join(name);
     let linker_script = fixtures.join("link.ld");
     let elf = work_dir.join("fixture.elf");
-    let image = work_dir.join("fixture.bin");
+    let binary = work_dir.join("fixture.bin");
 
     run(Command::new(tool("riscv64-unknown-elf-gcc"))
         .arg("-march=rv64i")
@@ -144,18 +108,18 @@ pub fn assemble(name: &str) -> Program {
         .arg("-O")
         .arg("binary")
         .arg(&elf)
-        .arg(&image));
+        .arg(&binary));
     let disassembly = run_capture(
         Command::new(tool("riscv64-unknown-elf-objdump"))
             .arg("-d")
             .arg("--no-show-raw-insn")
             .arg("-M")
-            .arg("no-aliases,numeric")
+            .arg("no-aliases")
             .arg(&elf),
     );
 
     Program {
-        image: fs::read(&image).expect("read flat image"),
+        binary: fs::read(&binary).expect("read flat binary"),
         instructions: parse_disassembly(&disassembly),
         work_dir,
         elf,
@@ -198,11 +162,7 @@ fn parse_gpr_dump(output: &str) -> [u64; GPR_COUNT] {
         let Some(hex) = pair[1].strip_prefix("0x") else {
             continue;
         };
-        let Some(index) = ABI_NAMES
-            .iter()
-            .find(|(abi, _)| *abi == name)
-            .map(|(_, index)| *index)
-        else {
+        let Some(index) = ABI_NAMES.iter().position(|abi| *abi == name) else {
             continue;
         };
         registers[index] = u64::from_str_radix(hex, 16).expect("hex register value");
