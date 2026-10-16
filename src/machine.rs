@@ -185,6 +185,57 @@ impl<B: Bus> Machine<B> {
                 let value = ((self.gpr(rs1) as u32) as i32) >> shift_32(self.gpr(rs2));
                 self.write(rd, sign_extend_32(u64::from(value as u32)));
             }
+            Instruction::Lb { rd, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self.bus.read_u8(address)? as i8 as u64;
+                self.write(rd, value);
+            }
+            Instruction::Lh { rd, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self.bus.read_u16(address)? as i16 as u64;
+                self.write(rd, value);
+            }
+            Instruction::Lw { rd, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self.bus.read_u32(address)? as i32 as u64;
+                self.write(rd, value);
+            }
+            Instruction::Ld { rd, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self.bus.read_u64(address)?;
+                self.write(rd, value);
+            }
+            Instruction::Lbu { rd, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = u64::from(self.bus.read_u8(address)?);
+                self.write(rd, value);
+            }
+            Instruction::Lhu { rd, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = u64::from(self.bus.read_u16(address)?);
+                self.write(rd, value);
+            }
+            Instruction::Lwu { rd, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = u64::from(self.bus.read_u32(address)?);
+                self.write(rd, value);
+            }
+            Instruction::Sb { rs2, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                self.bus.write_u8(address, self.gpr(rs2) as u8)?;
+            }
+            Instruction::Sh { rs2, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                self.bus.write_u16(address, self.gpr(rs2) as u16)?;
+            }
+            Instruction::Sw { rs2, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                self.bus.write_u32(address, self.gpr(rs2) as u32)?;
+            }
+            Instruction::Sd { rs2, rs1, offset } => {
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                self.bus.write_u64(address, self.gpr(rs2))?;
+            }
             Instruction::Beq { rs1, rs2, offset } => {
                 if self.gpr(rs1) == self.gpr(rs2) {
                     next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
@@ -609,6 +660,142 @@ mod tests {
             }),
             Err(Trap::InstructionAddressMisaligned)
         );
+        assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
+    }
+
+    #[test]
+    fn store_then_load_round_trips() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+        machine.cpu_mut().write_gpr(6, 0xdead_beef);
+
+        machine
+            .execute(Instruction::Sw {
+                rs2: 6,
+                rs1: 5,
+                offset: 8,
+            })
+            .unwrap();
+        machine
+            .execute(Instruction::Lwu {
+                rd: 7,
+                rs1: 5,
+                offset: 8,
+            })
+            .unwrap();
+
+        assert_eq!(machine.cpu().read_gpr(7), 0xdead_beef);
+    }
+
+    #[test]
+    fn loads_sign_or_zero_extend() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+        machine.cpu_mut().write_gpr(6, u64::MAX);
+        machine
+            .execute(Instruction::Sd {
+                rs2: 6,
+                rs1: 5,
+                offset: 0,
+            })
+            .unwrap();
+
+        let loads = [
+            (
+                Instruction::Lb {
+                    rd: 7,
+                    rs1: 5,
+                    offset: 0,
+                },
+                u64::MAX,
+            ),
+            (
+                Instruction::Lbu {
+                    rd: 7,
+                    rs1: 5,
+                    offset: 0,
+                },
+                0xff,
+            ),
+            (
+                Instruction::Lh {
+                    rd: 7,
+                    rs1: 5,
+                    offset: 0,
+                },
+                u64::MAX,
+            ),
+            (
+                Instruction::Lhu {
+                    rd: 7,
+                    rs1: 5,
+                    offset: 0,
+                },
+                0xffff,
+            ),
+            (
+                Instruction::Lw {
+                    rd: 7,
+                    rs1: 5,
+                    offset: 0,
+                },
+                u64::MAX,
+            ),
+            (
+                Instruction::Lwu {
+                    rd: 7,
+                    rs1: 5,
+                    offset: 0,
+                },
+                0xffff_ffff,
+            ),
+            (
+                Instruction::Ld {
+                    rd: 7,
+                    rs1: 5,
+                    offset: 0,
+                },
+                u64::MAX,
+            ),
+        ];
+
+        for (load, expected) in loads {
+            machine.cpu_mut().write_gpr(7, 0);
+            machine.execute(load).unwrap();
+            assert_eq!(machine.cpu().read_gpr(7), expected, "{load:?}");
+        }
+    }
+
+    #[test]
+    fn out_of_range_load_faults_without_touching_rd() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 7);
+        machine.cpu_mut().write_gpr(6, DRAM_BASE + 1024);
+
+        let result = machine.execute(Instruction::Lw {
+            rd: 5,
+            rs1: 6,
+            offset: 0,
+        });
+
+        assert_eq!(result, Err(Trap::AccessFault));
+        assert_eq!(machine.cpu().read_gpr(5), 7, "rd must not change");
+        assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
+    }
+
+    #[test]
+    fn out_of_range_store_faults_without_moving_the_pc() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 1);
+        machine.cpu_mut().write_gpr(6, DRAM_BASE + 1024);
+
+        let result = machine.execute(Instruction::Sw {
+            rs2: 5,
+            rs1: 6,
+            offset: 0,
+        });
+
+        assert_eq!(result, Err(Trap::AccessFault));
         assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
     }
 }

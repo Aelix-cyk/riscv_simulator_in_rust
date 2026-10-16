@@ -71,6 +71,32 @@ pub enum Instruction {
     /// `sraw rd, rs1, rs2`
     Sraw { rd: u8, rs1: u8, rs2: u8 },
 
+    // Loads.
+    /// `lb rd, offset(rs1)`
+    Lb { rd: u8, rs1: u8, offset: i64 },
+    /// `lh rd, offset(rs1)`
+    Lh { rd: u8, rs1: u8, offset: i64 },
+    /// `lw rd, offset(rs1)`
+    Lw { rd: u8, rs1: u8, offset: i64 },
+    /// `ld rd, offset(rs1)`
+    Ld { rd: u8, rs1: u8, offset: i64 },
+    /// `lbu rd, offset(rs1)`
+    Lbu { rd: u8, rs1: u8, offset: i64 },
+    /// `lhu rd, offset(rs1)`
+    Lhu { rd: u8, rs1: u8, offset: i64 },
+    /// `lwu rd, offset(rs1)`
+    Lwu { rd: u8, rs1: u8, offset: i64 },
+
+    // Stores.
+    /// `sb rs2, offset(rs1)`
+    Sb { rs2: u8, rs1: u8, offset: i64 },
+    /// `sh rs2, offset(rs1)`
+    Sh { rs2: u8, rs1: u8, offset: i64 },
+    /// `sw rs2, offset(rs1)`
+    Sw { rs2: u8, rs1: u8, offset: i64 },
+    /// `sd rs2, offset(rs1)`
+    Sd { rs2: u8, rs1: u8, offset: i64 },
+
     // Control transfers.
     /// `lui rd, imm` — `imm` is the value after the 12-bit shift.
     Lui { rd: u8, imm: i64 },
@@ -126,6 +152,17 @@ impl Instruction {
             Instruction::Sllw { .. } => "sllw",
             Instruction::Srlw { .. } => "srlw",
             Instruction::Sraw { .. } => "sraw",
+            Instruction::Lb { .. } => "lb",
+            Instruction::Lh { .. } => "lh",
+            Instruction::Lw { .. } => "lw",
+            Instruction::Ld { .. } => "ld",
+            Instruction::Lbu { .. } => "lbu",
+            Instruction::Lhu { .. } => "lhu",
+            Instruction::Lwu { .. } => "lwu",
+            Instruction::Sb { .. } => "sb",
+            Instruction::Sh { .. } => "sh",
+            Instruction::Sw { .. } => "sw",
+            Instruction::Sd { .. } => "sd",
             Instruction::Lui { .. } => "lui",
             Instruction::Auipc { .. } => "auipc",
             Instruction::Jalr { .. } => "jalr",
@@ -171,6 +208,17 @@ impl Instruction {
             Instruction::Sllw { rd, rs1, rs2 } => reg_op("sllw", rd, rs1, rs2),
             Instruction::Srlw { rd, rs1, rs2 } => reg_op("srlw", rd, rs1, rs2),
             Instruction::Sraw { rd, rs1, rs2 } => reg_op("sraw", rd, rs1, rs2),
+            Instruction::Lb { rd, rs1, offset } => load_op("lb", rd, rs1, offset),
+            Instruction::Lh { rd, rs1, offset } => load_op("lh", rd, rs1, offset),
+            Instruction::Lw { rd, rs1, offset } => load_op("lw", rd, rs1, offset),
+            Instruction::Ld { rd, rs1, offset } => load_op("ld", rd, rs1, offset),
+            Instruction::Lbu { rd, rs1, offset } => load_op("lbu", rd, rs1, offset),
+            Instruction::Lhu { rd, rs1, offset } => load_op("lhu", rd, rs1, offset),
+            Instruction::Lwu { rd, rs1, offset } => load_op("lwu", rd, rs1, offset),
+            Instruction::Sb { rs2, rs1, offset } => store_op("sb", rs2, rs1, offset),
+            Instruction::Sh { rs2, rs1, offset } => store_op("sh", rs2, rs1, offset),
+            Instruction::Sw { rs2, rs1, offset } => store_op("sw", rs2, rs1, offset),
+            Instruction::Sd { rs2, rs1, offset } => store_op("sd", rs2, rs1, offset),
             Instruction::Lui { rd, imm } => format!("lui {},{:#x}", abi_name(rd), u_field(imm)),
             Instruction::Auipc { rd, imm } => {
                 format!("auipc {},{:#x}", abi_name(rd), u_field(imm))
@@ -219,6 +267,16 @@ fn branch_op(mnemonic: &str, rs1: u8, rs2: u8, offset: i64) -> String {
         abi_name(rs2),
         relative(offset)
     )
+}
+
+/// `mnemonic rd,offset(rs1)`
+fn load_op(mnemonic: &str, rd: u8, rs1: u8, offset: i64) -> String {
+    format!("{mnemonic} {},{offset}({})", abi_name(rd), abi_name(rs1))
+}
+
+/// `mnemonic rs2,offset(rs1)`
+fn store_op(mnemonic: &str, rs2: u8, rs1: u8, offset: i64) -> String {
+    format!("{mnemonic} {},{offset}({})", abi_name(rs2), abi_name(rs1))
 }
 
 /// Formats a PC-relative offset the way the trace prints it.
@@ -285,6 +343,12 @@ impl Word {
     /// U-type immediate: `imm[31:12]` shifted into place.
     pub(crate) fn u_immediate(self) -> i64 {
         sign_extend(self.bits(12, 20), 20) << 12
+    }
+
+    /// S-type immediate: `imm[11:5]` at bits 31:25, `imm[4:0]` at bits 11:7.
+    pub(crate) fn s_immediate(self) -> i64 {
+        let value = (self.bits(25, 7) << 5) | self.bits(7, 5);
+        sign_extend(value, 12)
     }
 
     /// Shift amount of the 64-bit shifts: `imm[5:0]`.

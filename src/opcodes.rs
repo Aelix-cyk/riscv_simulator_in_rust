@@ -77,6 +77,19 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_BLTU, inst::MASK_BLTU, bltu),
     row(inst::MATCH_BGEU, inst::MASK_BGEU, bgeu),
     row(inst::MATCH_JAL, inst::MASK_JAL, jal),
+    // Loads.
+    row(inst::MATCH_LW, inst::MASK_LW, lw),
+    row(inst::MATCH_LD, inst::MASK_LD, ld),
+    row(inst::MATCH_LB, inst::MASK_LB, lb),
+    row(inst::MATCH_LH, inst::MASK_LH, lh),
+    row(inst::MATCH_LWU, inst::MASK_LWU, lwu),
+    row(inst::MATCH_LBU, inst::MASK_LBU, lbu),
+    row(inst::MATCH_LHU, inst::MASK_LHU, lhu),
+    // Stores.
+    row(inst::MATCH_SW, inst::MASK_SW, sw),
+    row(inst::MATCH_SD, inst::MASK_SD, sd),
+    row(inst::MATCH_SB, inst::MASK_SB, sb),
+    row(inst::MATCH_SH, inst::MASK_SH, sh),
 ];
 
 /// Builds a table row.
@@ -385,6 +398,94 @@ fn bgeu(word: Word) -> Instruction {
     }
 }
 
+fn lb(word: Word) -> Instruction {
+    Instruction::Lb {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn lh(word: Word) -> Instruction {
+    Instruction::Lh {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn lw(word: Word) -> Instruction {
+    Instruction::Lw {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn ld(word: Word) -> Instruction {
+    Instruction::Ld {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn lbu(word: Word) -> Instruction {
+    Instruction::Lbu {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn lhu(word: Word) -> Instruction {
+    Instruction::Lhu {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn lwu(word: Word) -> Instruction {
+    Instruction::Lwu {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn sb(word: Word) -> Instruction {
+    Instruction::Sb {
+        rs2: word.rs2(),
+        rs1: word.rs1(),
+        offset: word.s_immediate(),
+    }
+}
+
+fn sh(word: Word) -> Instruction {
+    Instruction::Sh {
+        rs2: word.rs2(),
+        rs1: word.rs1(),
+        offset: word.s_immediate(),
+    }
+}
+
+fn sw(word: Word) -> Instruction {
+    Instruction::Sw {
+        rs2: word.rs2(),
+        rs1: word.rs1(),
+        offset: word.s_immediate(),
+    }
+}
+
+fn sd(word: Word) -> Instruction {
+    Instruction::Sd {
+        rs2: word.rs2(),
+        rs1: word.rs1(),
+        offset: word.s_immediate(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,8 +525,9 @@ mod tests {
 
     #[test]
     fn unimplemented_instructions_do_not_decode() {
-        // Legal RV64I and M-extension encodings that this milestone does not run.
-        for code in [inst::MATCH_LW, inst::MATCH_SW, inst::MATCH_MUL] {
+        // Legal encodings that this milestone does not run: the M extension, and
+        // the system instructions that wait for the trap milestone.
+        for code in [inst::MATCH_MUL, inst::MATCH_FENCE, inst::MATCH_ECALL] {
             assert_eq!(decode(code), Err(Trap::IllegalInstruction), "{code:#010x}");
         }
     }

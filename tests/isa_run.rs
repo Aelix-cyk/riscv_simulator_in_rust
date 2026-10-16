@@ -8,7 +8,7 @@ use riscv_simulator_in_rust::machine::{Machine, RunOutcome};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
 /// Fixtures that run to the halt self-loop.
-const FIXTURES: [&str; 3] = ["alu.S", "upper.S", "branch.S"];
+const FIXTURES: [&str; 4] = ["alu.S", "upper.S", "branch.S", "memory.S"];
 
 #[test]
 fn fixtures_match_spike() {
