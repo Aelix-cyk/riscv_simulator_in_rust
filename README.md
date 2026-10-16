@@ -4,9 +4,13 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 
 ## Status
 
-Walking skeleton: a 64-bit hart that executes `addi`, `add`, `beq`, and `jal`,
-with a test suite checked against `spike`. The target profile is RVA22S64, built up
-progressively; see `GLOSSARY.md` for terminology.
+A 64-bit hart that executes all of RV64I — the integer ALU operations, the six
+conditional branches, `lui`/`auipc`/`jal`/`jalr`, every load and store, and
+`fence`/`fence.i` — with a test suite checked against `spike`. `ecall` and
+`ebreak` wait for the CSR and trap milestone. The target profile is RVA22S64, built
+up progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
+requirements and the choices the specification leaves open, and `docs/notes/` for
+working notes.
 
 ## Usage
 
@@ -28,7 +32,7 @@ its loadable bytes. Fixtures use `tests/fixtures/link.ld`, which places the imag
 `DRAM_BASE` with no leading gap:
 
 ```sh
-$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64i -mabi=lp64 -nostdlib \
+$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64im_zifencei -mabi=lp64 -nostdlib \
     -I tests/fixtures -Wl,-T,tests/fixtures/link.ld \
     -o /tmp/loop.elf tests/fixtures/loop.S
 $RISCV/bin/riscv64-unknown-elf-objcopy -O binary /tmp/loop.elf /tmp/loop.bin
@@ -40,8 +44,11 @@ cargo run -- --binary /tmp/loop.bin --trace
 ```sh
 cargo test                     # needs $RISCV and $SPIKE
 cargo clippy --all-targets
+cargo bench --bench decode     # decode throughput, optional CORPUS=fields
+cargo bench --bench execute    # execution throughput
 ```
 
 Fixtures live in `tests/fixtures/`; `tests/support/assemble.rs` assembles them at
 run time with the local toolchain and queries `spike` for the expected architectural
-state, so no binaries are committed.
+state — all 32 registers and the loaded memory — so no binaries are committed. The
+decoder and trace text are additionally checked line by line against `objdump`.
