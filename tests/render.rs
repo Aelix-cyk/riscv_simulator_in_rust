@@ -8,6 +8,57 @@ use riscv_simulator_in_rust::bus::Bus;
 use riscv_simulator_in_rust::decode::{Instruction, decode};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
+/// Fixtures whose instructions the renderer is checked against.
+const FIXTURES: [&str; 4] = ["loop.S", "edges.S", "fields.S", "alu.S"];
+
+/// Legal mnemonics that this milestone does not decode yet.
+const UNIMPLEMENTED: [&str; 3] = ["bne", "lw", "mul"];
+
+#[test]
+fn renderer_matches_objdump_text() {
+    for fixture in FIXTURES {
+        check_fixture(fixture);
+    }
+}
+
+/// Renders every instruction of a fixture and compares it with `objdump` text.
+fn check_fixture(name: &str) {
+    let program = assemble::assemble(name);
+    let mut memory = Memory::with_size(program.binary.len());
+    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
+
+    for (index, line) in program.instructions.iter().enumerate() {
+        let address = DRAM_BASE + index as u64 * 4;
+        let Ok(instruction) = decode(memory.read_u32(address).unwrap()) else {
+            let expected_to_fail =
+                line.mnemonic == ".word" || UNIMPLEMENTED.contains(&line.mnemonic.as_str());
+            assert!(
+                expected_to_fail,
+                "{name}: {} at {address:#x}",
+                line.mnemonic
+            );
+            continue;
+        };
+
+        assert_eq!(
+            instruction.render(),
+            expected(line),
+            "{name} at {address:#x}"
+        );
+
+        // Only control transfers carry a PC-relative target.
+        let control_transfer = matches!(
+            instruction,
+            Instruction::Beq { .. } | Instruction::Jal { .. }
+        );
+        assert_eq!(
+            control_transfer,
+            instruction.render().contains("pc "),
+            "{name} at {address:#x}"
+        );
+    }
+}
+
 /// Rewrites an `objdump` line with a PC-relative target, which is how the trace
 /// prints control transfers.
 fn expected(line: &Disassembled) -> String {
@@ -27,47 +78,4 @@ fn relative(line: &Disassembled) -> String {
     } else {
         format!("pc + {offset:#x}")
     }
-}
-
-#[test]
-fn renderer_matches_objdump_text() {
-    let program = assemble::assemble("loop.S");
-    let mut memory = Memory::with_size(program.binary.len());
-    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
-
-    for (index, line) in program.instructions.iter().enumerate() {
-        let address = DRAM_BASE + index as u64 * 4;
-        let word = memory.read_u32(address).unwrap();
-        let instruction = decode(word).unwrap_or_else(|trap| panic!("{address:#x}: {trap:?}"));
-
-        assert_eq!(instruction.render(), expected(line), "at {address:#x}");
-    }
-}
-
-#[test]
-fn renderer_covers_every_instruction_it_decodes() {
-    let program = assemble::assemble("fields.S");
-    let mut memory = Memory::with_size(program.binary.len());
-    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
-    let mut rendered = 0;
-
-    for (index, _) in program.instructions.iter().enumerate() {
-        let address = DRAM_BASE + index as u64 * 4;
-        let Ok(instruction) = decode(memory.read_u32(address).unwrap()) else {
-            continue;
-        };
-        let text = instruction.render();
-        let control_transfer = matches!(
-            instruction,
-            Instruction::Beq { .. } | Instruction::Jal { .. }
-        );
-        assert_eq!(
-            control_transfer,
-            text.contains("pc "),
-            "at {address:#x}: {text}"
-        );
-        rendered += 1;
-    }
-
-    assert_eq!(rendered, 5, "fields.S decodes addi, add, beq and two jumps");
 }

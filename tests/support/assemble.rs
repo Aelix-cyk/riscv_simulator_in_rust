@@ -50,14 +50,27 @@ impl Program {
             .address
     }
 
-    /// Final GPR values spike reports for this fixture.
+    /// Bytes of memory the oracle compares: the binary rounded up to the eight
+    /// bytes each `mem` command prints.
+    pub fn memory_len(&self) -> usize {
+        self.binary.len().div_ceil(8) * 8
+    }
+
+    /// Architectural state spike reports for this fixture: final registers plus
+    /// the first `binary.len()` bytes of memory, rounded up to the eight bytes
+    /// each `mem` command prints.
     ///
     /// Spike runs in debug mode and breaks at the halt self-loop, so the run is
     /// bounded by the program rather than by a timeout. `timeout` is still used as
     /// a guard against a fixture that never reaches its halt loop.
-    pub fn spike_registers(&self) -> [u64; GPR_COUNT] {
+    pub fn spike_state(&self) -> SpikeState {
         let commands = self.work_dir.join("spike-debug.txt");
-        let script = format!("until pc 0 {:#x}\nreg 0\nquit\n", self.halt_address());
+        let chunks = self.binary.len().div_ceil(8);
+        let mut script = format!("until pc 0 {:#x}\nreg 0\n", self.halt_address());
+        for chunk in 0..chunks {
+            script.push_str(&format!("mem 0 {:#x}\n", LOAD_ADDRESS + (chunk * 8) as u64));
+        }
+        script.push_str("quit\n");
         fs::write(&commands, script).expect("write spike debug commands");
 
         let output = run(Command::new("timeout")
@@ -67,9 +80,21 @@ impl Program {
             .arg(format!("--debug-cmd={}", commands.display()))
             .arg(&self.elf));
         // Spike writes debugger output to stderr, next to a `tohost` warning that
-        // the parser skips.
-        parse_gpr_dump(&String::from_utf8_lossy(&output.stderr))
+        // the parsers skip.
+        let dump = String::from_utf8_lossy(&output.stderr);
+        SpikeState {
+            registers: parse_gpr_dump(&dump),
+            memory: parse_memory_dump(&dump, chunks),
+        }
     }
+}
+
+/// State spike reports for a fixture.
+pub struct SpikeState {
+    /// Final general-purpose register values.
+    pub registers: [u64; GPR_COUNT],
+    /// Final memory contents from `LOAD_ADDRESS`, eight bytes per `mem` line.
+    pub memory: Vec<u8>,
 }
 
 impl Drop for Program {
@@ -96,7 +121,7 @@ pub fn assemble(name: &str) -> Program {
     let binary = work_dir.join("fixture.bin");
 
     run(Command::new(tool("riscv64-unknown-elf-gcc"))
-        .arg("-march=rv64i")
+        .arg("-march=rv64im")
         .arg("-mabi=lp64")
         .arg("-nostdlib")
         .arg(format!("-I{}", fixtures.display()))
@@ -171,6 +196,31 @@ fn parse_gpr_dump(output: &str) -> [u64; GPR_COUNT] {
 
     assert_eq!(found, GPR_COUNT, "spike printed {found} registers");
     registers
+}
+
+/// Reads spike's `mem` output: one 8-byte, little-endian hex word per chunk.
+fn parse_memory_dump(output: &str, chunks: usize) -> Vec<u8> {
+    let mut memory = Vec::with_capacity(chunks * 8);
+
+    for line in output.lines() {
+        let mut tokens = line.split_whitespace();
+        let Some(word) = tokens.next().and_then(|token| token.strip_prefix("0x")) else {
+            continue;
+        };
+        if tokens.next().is_some() || word.len() != 16 {
+            continue; // register dump lines carry a `name:` prefix
+        }
+        let value = u64::from_str_radix(word, 16).expect("hex memory word");
+        memory.extend_from_slice(&value.to_le_bytes());
+    }
+
+    assert_eq!(
+        memory.len(),
+        chunks * 8,
+        "spike printed {} memory words, expected {chunks}",
+        memory.len() / 8
+    );
+    memory
 }
 
 /// Runs a command, panicking with its stderr when it fails.

@@ -10,7 +10,7 @@ use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 #[test]
 fn loop_fixture_halts_with_spike_state() {
     let program = assemble::assemble("loop.S");
-    let mut machine = Machine::new(Memory::with_size(program.binary.len()));
+    let mut machine = Machine::new(Memory::with_size(program.memory_len()));
     machine.cpu_mut().set_pc(assemble::LOAD_ADDRESS);
     machine
         .bus_mut()
@@ -22,9 +22,17 @@ fn loop_fixture_halts_with_spike_state() {
     assert_eq!(outcome, RunOutcome::Halted);
     assert_eq!(machine.cpu().pc(), program.halt_address());
 
-    let spike = program.spike_registers();
-    for (index, spike_value) in spike.iter().enumerate() {
-        assert_eq!(machine.cpu().read_gpr(index), *spike_value, "x{index}");
+    let spike = program.spike_state();
+    for (index, expected) in spike.registers.iter().enumerate() {
+        assert_eq!(machine.cpu().read_gpr(index), *expected, "x{index}");
+    }
+    for (offset, expected) in spike.memory.iter().enumerate() {
+        let address = assemble::LOAD_ADDRESS + offset as u64;
+        assert_eq!(
+            machine.bus_mut().read_u8(address).unwrap(),
+            *expected,
+            "memory at {address:#x}"
+        );
     }
 }
 

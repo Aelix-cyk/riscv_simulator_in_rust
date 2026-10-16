@@ -12,5 +12,7 @@ fwd:
 	andi	x7, x8, 3           # legal, not decoded yet
 	bne	x10, x11, end       # legal, not decoded yet
 	jal	x1, end
+	lw	x5, 0(x6)            # legal RV64I, not decoded yet
+	mul	x7, x8, x9          # legal M extension, not decoded yet
 end:
 	jal	x0, end

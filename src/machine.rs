@@ -84,26 +84,110 @@ impl<B: Bus> Machine<B> {
     /// Executes one already-fetched instruction, for callers that trace them.
     pub fn execute(&mut self, instruction: Instruction) -> Result<(), Trap> {
         let pc = self.cpu.pc();
+        let mut next_pc = pc.wrapping_add(INSTRUCTION_BYTES);
 
         match instruction {
             Instruction::Addi { rd, rs1, imm } => {
-                let value = self.cpu.read_gpr(rs1.into()).wrapping_add_signed(imm);
-                self.cpu.write_gpr(rd.into(), value);
-                self.advance();
+                let value = self.gpr(rs1).wrapping_add_signed(imm);
+                self.write(rd, value);
+            }
+            Instruction::Slti { rd, rs1, imm } => {
+                self.write(rd, u64::from((self.gpr(rs1) as i64) < imm))
+            }
+            Instruction::Sltiu { rd, rs1, imm } => {
+                self.write(rd, u64::from(self.gpr(rs1) < imm as u64))
+            }
+            Instruction::Xori { rd, rs1, imm } => self.write(rd, self.gpr(rs1) ^ imm as u64),
+            Instruction::Ori { rd, rs1, imm } => self.write(rd, self.gpr(rs1) | imm as u64),
+            Instruction::Andi { rd, rs1, imm } => self.write(rd, self.gpr(rs1) & imm as u64),
+            Instruction::Slli { rd, rs1, shamt } => {
+                self.write(rd, self.gpr(rs1).wrapping_shl(shamt.into()));
+            }
+            Instruction::Srli { rd, rs1, shamt } => {
+                self.write(rd, self.gpr(rs1).wrapping_shr(shamt.into()));
+            }
+            Instruction::Srai { rd, rs1, shamt } => {
+                self.write(rd, ((self.gpr(rs1) as i64) >> shamt) as u64);
+            }
+            Instruction::Addiw { rd, rs1, imm } => {
+                self.write(rd, sign_extend_32(self.gpr(rs1).wrapping_add_signed(imm)));
+            }
+            Instruction::Slliw { rd, rs1, shamt } => {
+                let value = (self.gpr(rs1) as u32).wrapping_shl(shamt.into());
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Srliw { rd, rs1, shamt } => {
+                let value = (self.gpr(rs1) as u32).wrapping_shr(shamt.into());
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Sraiw { rd, rs1, shamt } => {
+                let value = ((self.gpr(rs1) as u32) as i32) >> shamt;
+                self.write(rd, sign_extend_32(u64::from(value as u32)));
             }
             Instruction::Add { rd, rs1, rs2 } => {
-                let value = self
-                    .cpu
-                    .read_gpr(rs1.into())
-                    .wrapping_add(self.cpu.read_gpr(rs2.into()));
-                self.cpu.write_gpr(rd.into(), value);
-                self.advance();
+                let value = self.gpr(rs1).wrapping_add(self.gpr(rs2));
+                self.write(rd, value);
+            }
+            Instruction::Sub { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1).wrapping_sub(self.gpr(rs2));
+                self.write(rd, value);
+            }
+            Instruction::Sll { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1).wrapping_shl(shift_64(self.gpr(rs2)));
+                self.write(rd, value);
+            }
+            Instruction::Slt { rd, rs1, rs2 } => {
+                self.write(
+                    rd,
+                    u64::from((self.gpr(rs1) as i64) < (self.gpr(rs2) as i64)),
+                );
+            }
+            Instruction::Sltu { rd, rs1, rs2 } => {
+                self.write(rd, u64::from(self.gpr(rs1) < self.gpr(rs2)));
+            }
+            Instruction::Xor { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1) ^ self.gpr(rs2);
+                self.write(rd, value);
+            }
+            Instruction::Srl { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1).wrapping_shr(shift_64(self.gpr(rs2)));
+                self.write(rd, value);
+            }
+            Instruction::Sra { rd, rs1, rs2 } => {
+                let value = ((self.gpr(rs1) as i64) >> shift_64(self.gpr(rs2))) as u64;
+                self.write(rd, value);
+            }
+            Instruction::Or { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1) | self.gpr(rs2);
+                self.write(rd, value);
+            }
+            Instruction::And { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1) & self.gpr(rs2);
+                self.write(rd, value);
+            }
+            Instruction::Addw { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1).wrapping_add(self.gpr(rs2));
+                self.write(rd, sign_extend_32(value));
+            }
+            Instruction::Subw { rd, rs1, rs2 } => {
+                let value = self.gpr(rs1).wrapping_sub(self.gpr(rs2));
+                self.write(rd, sign_extend_32(value));
+            }
+            Instruction::Sllw { rd, rs1, rs2 } => {
+                let value = (self.gpr(rs1) as u32).wrapping_shl(shift_32(self.gpr(rs2)));
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Srlw { rd, rs1, rs2 } => {
+                let value = (self.gpr(rs1) as u32).wrapping_shr(shift_32(self.gpr(rs2)));
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Sraw { rd, rs1, rs2 } => {
+                let value = ((self.gpr(rs1) as u32) as i32) >> shift_32(self.gpr(rs2));
+                self.write(rd, sign_extend_32(u64::from(value as u32)));
             }
             Instruction::Beq { rs1, rs2, offset } => {
-                if self.cpu.read_gpr(rs1.into()) == self.cpu.read_gpr(rs2.into()) {
-                    self.cpu.set_pc(pc.wrapping_add_signed(offset));
-                } else {
-                    self.advance();
+                if self.gpr(rs1) == self.gpr(rs2) {
+                    next_pc = pc.wrapping_add_signed(offset);
                 }
             }
             Instruction::Jal { rd, offset } => {
@@ -112,19 +196,38 @@ impl<B: Bus> Machine<B> {
                     self.halted = true;
                     return Ok(());
                 }
-                self.cpu
-                    .write_gpr(rd.into(), pc.wrapping_add(INSTRUCTION_BYTES));
-                self.cpu.set_pc(pc.wrapping_add_signed(offset));
+                self.write(rd, next_pc);
+                next_pc = pc.wrapping_add_signed(offset);
             }
         }
+        self.cpu.set_pc(next_pc);
         Ok(())
     }
 
-    /// Moves the PC to the next instruction.
-    fn advance(&mut self) {
-        let next = self.cpu.pc().wrapping_add(INSTRUCTION_BYTES);
-        self.cpu.set_pc(next);
+    /// Reads general-purpose register `index`.
+    fn gpr(&self, index: u8) -> u64 {
+        self.cpu.read_gpr(usize::from(index))
     }
+
+    /// Writes `value` to general-purpose register `rd`; `x0` discards it.
+    fn write(&mut self, rd: u8, value: u64) {
+        self.cpu.write_gpr(usize::from(rd), value);
+    }
+}
+
+/// Sign-extends the low 32 bits of `value` to 64 bits.
+fn sign_extend_32(value: u64) -> u64 {
+    i64::from(value as u32 as i32) as u64
+}
+
+/// Shift amount of the 64-bit shifts, taken from the low six bits.
+fn shift_64(value: u64) -> u32 {
+    (value & 0x3f) as u32
+}
+
+/// Shift amount of the W-forms, taken from the low five bits.
+fn shift_32(value: u64) -> u32 {
+    (value & 0x1f) as u32
 }
 
 #[cfg(test)]
