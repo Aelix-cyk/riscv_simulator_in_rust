@@ -284,8 +284,11 @@ impl<B: Bus> Machine<B> {
                     self.halted = true;
                     return Ok(());
                 }
+                // Check the target before linking, so a trapping jump leaves the
+                // destination register alone, as `jalr` and the branches do.
+                let target = Self::checked_target(pc.wrapping_add_signed(offset))?;
                 self.write(rd, next_pc);
-                next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
+                next_pc = target;
             }
         }
         self.cpu.set_pc(next_pc);
@@ -475,6 +478,7 @@ mod tests {
     fn jalr_to_a_misaligned_target_traps() {
         let mut machine = machine();
         machine.cpu_mut().write_gpr(6, DRAM_BASE + 2);
+        machine.cpu_mut().write_gpr(5, 7);
 
         assert_eq!(
             machine.execute(Instruction::Jalr {
@@ -484,6 +488,20 @@ mod tests {
             }),
             Err(Trap::InstructionAddressMisaligned)
         );
+        assert_eq!(machine.cpu().read_gpr(5), 7, "rd must not change");
+        assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
+    }
+
+    #[test]
+    fn jal_to_a_misaligned_target_traps() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 7);
+
+        assert_eq!(
+            machine.execute(Instruction::Jal { rd: 5, offset: 2 }),
+            Err(Trap::InstructionAddressMisaligned)
+        );
+        assert_eq!(machine.cpu().read_gpr(5), 7, "rd must not change");
         assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
     }
 
