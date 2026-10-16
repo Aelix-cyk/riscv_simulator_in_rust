@@ -90,6 +90,9 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_SD, inst::MASK_SD, sd),
     row(inst::MATCH_SB, inst::MASK_SB, sb),
     row(inst::MATCH_SH, inst::MASK_SH, sh),
+    // Ordering.
+    row(inst::MATCH_FENCE, inst::MASK_FENCE, fence),
+    row(inst::MATCH_FENCE_I, inst::MASK_FENCE_I, fence_i),
 ];
 
 /// Builds a table row.
@@ -486,6 +489,17 @@ fn sd(word: Word) -> Instruction {
     }
 }
 
+fn fence(word: Word) -> Instruction {
+    Instruction::Fence {
+        pred: word.pred(),
+        succ: word.succ(),
+    }
+}
+
+fn fence_i(_word: Word) -> Instruction {
+    Instruction::FenceI
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,7 +541,7 @@ mod tests {
     fn unimplemented_instructions_do_not_decode() {
         // Legal encodings that this milestone does not run: the M extension, and
         // the system instructions that wait for the trap milestone.
-        for code in [inst::MATCH_MUL, inst::MATCH_FENCE, inst::MATCH_ECALL] {
+        for code in [inst::MATCH_MUL, inst::MATCH_ECALL, inst::MATCH_EBREAK] {
             assert_eq!(decode(code), Err(Trap::IllegalInstruction), "{code:#010x}");
         }
     }

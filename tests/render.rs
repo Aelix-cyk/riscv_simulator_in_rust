@@ -9,8 +9,8 @@ use riscv_simulator_in_rust::decode::{Instruction, decode};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
 /// Fixtures whose instructions the renderer is checked against.
-const FIXTURES: [&str; 7] = [
-    "loop.S", "edges.S", "fields.S", "alu.S", "upper.S", "branch.S", "memory.S",
+const FIXTURES: [&str; 8] = [
+    "loop.S", "edges.S", "fields.S", "alu.S", "upper.S", "branch.S", "memory.S", "fence.S",
 ];
 
 /// Legal mnemonics that this milestone does not decode yet.
@@ -83,6 +83,7 @@ fn expected(line: &Disassembled) -> String {
             relative(line)
         ),
         "jal" => format!("jal {},{}", operands[0], relative(line)),
+        mnemonic if line.operands.is_empty() => mnemonic.to_owned(),
         mnemonic => format!("{} {}", mnemonic, line.operands),
     }
 }

@@ -121,7 +121,7 @@ pub fn assemble(name: &str) -> Program {
     let binary = work_dir.join("fixture.bin");
 
     run(Command::new(tool("riscv64-unknown-elf-gcc"))
-        .arg("-march=rv64im")
+        .arg("-march=rv64im_zifencei")
         .arg("-mabi=lp64")
         .arg("-nostdlib")
         .arg(format!("-I{}", fixtures.display()))

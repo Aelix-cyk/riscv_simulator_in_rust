@@ -236,6 +236,9 @@ impl<B: Bus> Machine<B> {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 self.bus.write_u64(address, self.gpr(rs2))?;
             }
+            // Ordering operations have no effect on one hart with no cache model:
+            // the shared PC update below retires them.
+            Instruction::Fence { .. } | Instruction::FenceI => {}
             Instruction::Beq { rs1, rs2, offset } => {
                 if self.gpr(rs1) == self.gpr(rs2) {
                     next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
@@ -797,5 +800,22 @@ mod tests {
 
         assert_eq!(result, Err(Trap::AccessFault));
         assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
+    }
+
+    #[test]
+    fn fences_advance_the_pc_and_change_nothing_else() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 42);
+
+        machine
+            .execute(Instruction::Fence {
+                pred: 0b1111,
+                succ: 0b1111,
+            })
+            .unwrap();
+        machine.execute(Instruction::FenceI).unwrap();
+
+        assert_eq!(machine.cpu().pc(), 8, "both fences retire");
+        assert_eq!(machine.cpu().read_gpr(5), 42, "no register changes");
     }
 }

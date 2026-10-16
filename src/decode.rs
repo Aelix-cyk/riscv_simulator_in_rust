@@ -97,6 +97,12 @@ pub enum Instruction {
     /// `sd rs2, offset(rs1)`
     Sd { rs2: u8, rs1: u8, offset: i64 },
 
+    // Ordering.
+    /// `fence pred, succ` — the two four-bit access sets.
+    Fence { pred: u8, succ: u8 },
+    /// `fence.i` — instruction-fetch fence, from Zifencei.
+    FenceI,
+
     // Control transfers.
     /// `lui rd, imm` — `imm` is the value after the 12-bit shift.
     Lui { rd: u8, imm: i64 },
@@ -163,6 +169,8 @@ impl Instruction {
             Instruction::Sh { .. } => "sh",
             Instruction::Sw { .. } => "sw",
             Instruction::Sd { .. } => "sd",
+            Instruction::Fence { .. } => "fence",
+            Instruction::FenceI => "fence.i",
             Instruction::Lui { .. } => "lui",
             Instruction::Auipc { .. } => "auipc",
             Instruction::Jalr { .. } => "jalr",
@@ -219,6 +227,10 @@ impl Instruction {
             Instruction::Sh { rs2, rs1, offset } => store_op("sh", rs2, rs1, offset),
             Instruction::Sw { rs2, rs1, offset } => store_op("sw", rs2, rs1, offset),
             Instruction::Sd { rs2, rs1, offset } => store_op("sd", rs2, rs1, offset),
+            Instruction::Fence { pred, succ } => {
+                format!("fence {},{}", fence_set(pred), fence_set(succ))
+            }
+            Instruction::FenceI => "fence.i".to_owned(),
             Instruction::Lui { rd, imm } => format!("lui {},{:#x}", abi_name(rd), u_field(imm)),
             Instruction::Auipc { rd, imm } => {
                 format!("auipc {},{:#x}", abi_name(rd), u_field(imm))
@@ -277,6 +289,22 @@ fn load_op(mnemonic: &str, rd: u8, rs1: u8, offset: i64) -> String {
 /// `mnemonic rs2,offset(rs1)`
 fn store_op(mnemonic: &str, rs2: u8, rs1: u8, offset: i64) -> String {
     format!("{mnemonic} {},{offset}({})", abi_name(rs2), abi_name(rs1))
+}
+
+/// Renders a four-bit fence access set the way `objdump` does, in `i`, `o`, `r`,
+/// `w` order. An empty set cannot come from assembly; `objdump` calls it
+/// `unknown`.
+fn fence_set(bits: u8) -> String {
+    let mut text = String::new();
+    for (mask, letter) in [(0b1000, 'i'), (0b0100, 'o'), (0b0010, 'r'), (0b0001, 'w')] {
+        if bits & mask != 0 {
+            text.push(letter);
+        }
+    }
+    if text.is_empty() {
+        text.push_str("unknown");
+    }
+    text
 }
 
 /// Formats a PC-relative offset the way the trace prints it.
@@ -349,6 +377,16 @@ impl Word {
     pub(crate) fn s_immediate(self) -> i64 {
         let value = (self.bits(25, 7) << 5) | self.bits(7, 5);
         sign_extend(value, 12)
+    }
+
+    /// Fence predecessor set, bits 27:24.
+    pub(crate) fn pred(self) -> u8 {
+        self.bits(24, 4) as u8
+    }
+
+    /// Fence successor set, bits 23:20.
+    pub(crate) fn succ(self) -> u8 {
+        self.bits(20, 4) as u8
     }
 
     /// Shift amount of the 64-bit shifts: `imm[5:0]`.
