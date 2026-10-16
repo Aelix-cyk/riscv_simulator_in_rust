@@ -72,6 +72,12 @@ pub enum Instruction {
     Sraw { rd: u8, rs1: u8, rs2: u8 },
 
     // Control transfers.
+    /// `lui rd, imm` — `imm` is the value after the 12-bit shift.
+    Lui { rd: u8, imm: i64 },
+    /// `auipc rd, imm` — `imm` is the value after the 12-bit shift.
+    Auipc { rd: u8, imm: i64 },
+    /// `jalr rd, offset(rs1)`
+    Jalr { rd: u8, rs1: u8, offset: i64 },
     /// `beq rs1, rs2, offset` — offset is relative to the instruction address.
     Beq { rs1: u8, rs2: u8, offset: i64 },
     /// `jal rd, offset` — offset is relative to the instruction address.
@@ -110,6 +116,9 @@ impl Instruction {
             Instruction::Sllw { .. } => "sllw",
             Instruction::Srlw { .. } => "srlw",
             Instruction::Sraw { .. } => "sraw",
+            Instruction::Lui { .. } => "lui",
+            Instruction::Auipc { .. } => "auipc",
+            Instruction::Jalr { .. } => "jalr",
             Instruction::Beq { .. } => "beq",
             Instruction::Jal { .. } => "jal",
         }
@@ -147,6 +156,13 @@ impl Instruction {
             Instruction::Sllw { rd, rs1, rs2 } => reg_op("sllw", rd, rs1, rs2),
             Instruction::Srlw { rd, rs1, rs2 } => reg_op("srlw", rd, rs1, rs2),
             Instruction::Sraw { rd, rs1, rs2 } => reg_op("sraw", rd, rs1, rs2),
+            Instruction::Lui { rd, imm } => format!("lui {},{:#x}", abi_name(rd), u_field(imm)),
+            Instruction::Auipc { rd, imm } => {
+                format!("auipc {},{:#x}", abi_name(rd), u_field(imm))
+            }
+            Instruction::Jalr { rd, rs1, offset } => {
+                format!("jalr {},{}({})", abi_name(rd), offset, abi_name(rs1))
+            }
             Instruction::Beq { rs1, rs2, offset } => format!(
                 "beq {},{},{}",
                 abi_name(rs1),
@@ -187,6 +203,12 @@ fn relative(offset: i64) -> String {
     } else {
         format!("pc + {offset:#x}")
     }
+}
+
+/// The 20-bit U-type field as `objdump` prints it: the immediate before its
+/// 12-bit shift.
+fn u_field(imm: i64) -> u32 {
+    ((imm >> 12) as u32) & 0xfffff
 }
 
 /// Decodes a 32-bit instruction word.
@@ -233,6 +255,11 @@ impl Word {
     /// I-type immediate: `imm[11:0]`, bits 31:20.
     pub(crate) fn i_immediate(self) -> i64 {
         sign_extend(self.bits(20, 12), 12)
+    }
+
+    /// U-type immediate: `imm[31:12]` shifted into place.
+    pub(crate) fn u_immediate(self) -> i64 {
+        sign_extend(self.bits(12, 20), 20) << 12
     }
 
     /// Shift amount of the 64-bit shifts: `imm[5:0]`.

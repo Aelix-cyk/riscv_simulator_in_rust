@@ -190,6 +190,18 @@ impl<B: Bus> Machine<B> {
                     next_pc = pc.wrapping_add_signed(offset);
                 }
             }
+            Instruction::Lui { rd, imm } => self.write(rd, imm as u64),
+            Instruction::Auipc { rd, imm } => {
+                self.write(rd, pc.wrapping_add_signed(imm));
+            }
+            Instruction::Jalr { rd, rs1, offset } => {
+                let target = self.gpr(rs1).wrapping_add_signed(offset) & !1;
+                if target % INSTRUCTION_BYTES != 0 {
+                    return Err(Trap::InstructionAddressMisaligned);
+                }
+                self.write(rd, next_pc);
+                next_pc = target;
+            }
             Instruction::Jal { rd, offset } => {
                 // `jal x0, 0` is the halt convention: no link, no movement.
                 if rd == 0 && offset == 0 {
@@ -373,5 +385,39 @@ mod tests {
         machine.cpu_mut().set_pc(DRAM_BASE - 4);
 
         assert_eq!(machine.step(), Err(Trap::AccessFault));
+    }
+
+    #[test]
+    fn jalr_to_a_misaligned_target_traps() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(6, DRAM_BASE + 2);
+
+        assert_eq!(
+            machine.execute(Instruction::Jalr {
+                rd: 5,
+                rs1: 6,
+                offset: 0
+            }),
+            Err(Trap::InstructionAddressMisaligned)
+        );
+        assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
+    }
+
+    #[test]
+    fn jalr_links_and_clears_bit_zero() {
+        let mut machine = machine();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(6, DRAM_BASE + 8 + 1);
+
+        machine
+            .execute(Instruction::Jalr {
+                rd: 5,
+                rs1: 6,
+                offset: 0,
+            })
+            .unwrap();
+
+        assert_eq!(machine.cpu().read_gpr(5), DRAM_BASE + 4);
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + 8);
     }
 }

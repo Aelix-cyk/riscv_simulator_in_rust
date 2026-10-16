@@ -7,4 +7,6 @@ pub enum Trap {
     IllegalInstruction,
     /// An access fell outside any implemented region.
     AccessFault,
+    /// A jump or branch target was not four-byte aligned.
+    InstructionAddressMisaligned,
 }

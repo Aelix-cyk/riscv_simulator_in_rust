@@ -9,7 +9,7 @@ use riscv_simulator_in_rust::decode::{Instruction, decode};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
 /// Fixtures whose instructions the renderer is checked against.
-const FIXTURES: [&str; 4] = ["loop.S", "edges.S", "fields.S", "alu.S"];
+const FIXTURES: [&str; 5] = ["loop.S", "edges.S", "fields.S", "alu.S", "upper.S"];
 
 /// Legal mnemonics that this milestone does not decode yet.
 const UNIMPLEMENTED: [&str; 3] = ["bne", "lw", "mul"];
@@ -46,15 +46,18 @@ fn check_fixture(name: &str) {
             "{name} at {address:#x}"
         );
 
-        // Only control transfers carry a PC-relative target.
-        let control_transfer = matches!(
+        // Only the PC-relative jumps and branches carry a `pc` target; `jalr`
+        // takes a register-based one.
+        let pc_relative = matches!(
             instruction,
             Instruction::Beq { .. } | Instruction::Jal { .. }
         );
+        // `auipc t1,0x1` also contains "pc", so look for the target form.
+        let text = instruction.render();
+        let carries_target = text.contains(",pc + ") || text.contains(",pc - ");
         assert_eq!(
-            control_transfer,
-            instruction.render().contains("pc "),
-            "{name} at {address:#x}"
+            pc_relative, carries_target,
+            "{name} at {address:#x}: {text}"
         );
     }
 }

@@ -67,6 +67,9 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_SRLW, inst::MASK_SRLW, srlw),
     row(inst::MATCH_SRAW, inst::MASK_SRAW, sraw),
     // Control transfers.
+    row(inst::MATCH_LUI, inst::MASK_LUI, lui),
+    row(inst::MATCH_AUIPC, inst::MASK_AUIPC, auipc),
+    row(inst::MATCH_JALR, inst::MASK_JALR, jalr),
     row(inst::MATCH_BEQ, inst::MASK_BEQ, beq),
     row(inst::MATCH_JAL, inst::MASK_JAL, jal),
 ];
@@ -305,6 +308,28 @@ fn beq(word: Word) -> Instruction {
         rs1: word.rs1(),
         rs2: word.rs2(),
         offset: word.b_immediate(),
+    }
+}
+
+fn lui(word: Word) -> Instruction {
+    Instruction::Lui {
+        rd: word.rd(),
+        imm: word.u_immediate(),
+    }
+}
+
+fn auipc(word: Word) -> Instruction {
+    Instruction::Auipc {
+        rd: word.rd(),
+        imm: word.u_immediate(),
+    }
+}
+
+fn jalr(word: Word) -> Instruction {
+    Instruction::Jalr {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
     }
 }
 
