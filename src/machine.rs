@@ -187,7 +187,32 @@ impl<B: Bus> Machine<B> {
             }
             Instruction::Beq { rs1, rs2, offset } => {
                 if self.gpr(rs1) == self.gpr(rs2) {
-                    next_pc = pc.wrapping_add_signed(offset);
+                    next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
+                }
+            }
+            Instruction::Bne { rs1, rs2, offset } => {
+                if self.gpr(rs1) != self.gpr(rs2) {
+                    next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
+                }
+            }
+            Instruction::Blt { rs1, rs2, offset } => {
+                if (self.gpr(rs1) as i64) < (self.gpr(rs2) as i64) {
+                    next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
+                }
+            }
+            Instruction::Bge { rs1, rs2, offset } => {
+                if (self.gpr(rs1) as i64) >= (self.gpr(rs2) as i64) {
+                    next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
+                }
+            }
+            Instruction::Bltu { rs1, rs2, offset } => {
+                if self.gpr(rs1) < self.gpr(rs2) {
+                    next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
+                }
+            }
+            Instruction::Bgeu { rs1, rs2, offset } => {
+                if self.gpr(rs1) >= self.gpr(rs2) {
+                    next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
                 }
             }
             Instruction::Lui { rd, imm } => self.write(rd, imm as u64),
@@ -195,10 +220,7 @@ impl<B: Bus> Machine<B> {
                 self.write(rd, pc.wrapping_add_signed(imm));
             }
             Instruction::Jalr { rd, rs1, offset } => {
-                let target = self.gpr(rs1).wrapping_add_signed(offset) & !1;
-                if target % INSTRUCTION_BYTES != 0 {
-                    return Err(Trap::InstructionAddressMisaligned);
-                }
+                let target = Self::checked_target(self.gpr(rs1).wrapping_add_signed(offset) & !1)?;
                 self.write(rd, next_pc);
                 next_pc = target;
             }
@@ -209,7 +231,7 @@ impl<B: Bus> Machine<B> {
                     return Ok(());
                 }
                 self.write(rd, next_pc);
-                next_pc = pc.wrapping_add_signed(offset);
+                next_pc = Self::checked_target(pc.wrapping_add_signed(offset))?;
             }
         }
         self.cpu.set_pc(next_pc);
@@ -219,6 +241,14 @@ impl<B: Bus> Machine<B> {
     /// Reads general-purpose register `index`.
     fn gpr(&self, index: u8) -> u64 {
         self.cpu.read_gpr(usize::from(index))
+    }
+
+    /// Checks that a control-transfer target is four-byte aligned.
+    fn checked_target(target: u64) -> Result<u64, Trap> {
+        if !target.is_multiple_of(INSTRUCTION_BYTES) {
+            return Err(Trap::InstructionAddressMisaligned);
+        }
+        Ok(target)
     }
 
     /// Writes `value` to general-purpose register `rd`; `x0` discards it.
@@ -419,5 +449,166 @@ mod tests {
 
         assert_eq!(machine.cpu().read_gpr(5), DRAM_BASE + 4);
         assert_eq!(machine.cpu().pc(), DRAM_BASE + 8);
+    }
+
+    #[test]
+    fn each_branch_condition_decides_as_the_spec_says() {
+        const TAKEN: u64 = DRAM_BASE + 16;
+        const NEXT: u64 = DRAM_BASE + 4;
+        let neg_one = u64::MAX;
+        let cases = [
+            (
+                Instruction::Beq {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                1,
+                TAKEN,
+            ),
+            (
+                Instruction::Beq {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                2,
+                NEXT,
+            ),
+            (
+                Instruction::Bne {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                2,
+                TAKEN,
+            ),
+            (
+                Instruction::Bne {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                1,
+                NEXT,
+            ),
+            (
+                Instruction::Blt {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                neg_one,
+                1,
+                TAKEN,
+            ),
+            (
+                Instruction::Blt {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                neg_one,
+                NEXT,
+            ),
+            (
+                Instruction::Bge {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                neg_one,
+                TAKEN,
+            ),
+            (
+                Instruction::Bge {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                neg_one,
+                1,
+                NEXT,
+            ),
+            (
+                Instruction::Bltu {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                2,
+                TAKEN,
+            ),
+            (
+                Instruction::Bltu {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                neg_one,
+                1,
+                NEXT,
+            ),
+            (
+                Instruction::Bgeu {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                2,
+                1,
+                TAKEN,
+            ),
+            (
+                Instruction::Bgeu {
+                    rs1: 5,
+                    rs2: 6,
+                    offset: 16,
+                },
+                1,
+                neg_one,
+                NEXT,
+            ),
+        ];
+
+        for (instruction, left, right, expected_pc) in cases {
+            let mut machine = machine();
+            machine.cpu_mut().set_pc(DRAM_BASE);
+            machine.cpu_mut().write_gpr(5, left);
+            machine.cpu_mut().write_gpr(6, right);
+
+            machine.execute(instruction).unwrap();
+
+            assert_eq!(
+                machine.cpu().pc(),
+                expected_pc,
+                "{instruction:?} with {left:#x} and {right:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn taken_branch_to_a_misaligned_target_traps() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 1);
+        machine.cpu_mut().write_gpr(6, 2);
+
+        assert_eq!(
+            machine.execute(Instruction::Bne {
+                rs1: 5,
+                rs2: 6,
+                offset: 2
+            }),
+            Err(Trap::InstructionAddressMisaligned)
+        );
+        assert_eq!(machine.cpu().pc(), 0, "the PC must not move");
     }
 }

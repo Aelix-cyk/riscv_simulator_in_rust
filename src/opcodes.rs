@@ -71,6 +71,11 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_AUIPC, inst::MASK_AUIPC, auipc),
     row(inst::MATCH_JALR, inst::MASK_JALR, jalr),
     row(inst::MATCH_BEQ, inst::MASK_BEQ, beq),
+    row(inst::MATCH_BNE, inst::MASK_BNE, bne),
+    row(inst::MATCH_BLT, inst::MASK_BLT, blt),
+    row(inst::MATCH_BGE, inst::MASK_BGE, bge),
+    row(inst::MATCH_BLTU, inst::MASK_BLTU, bltu),
+    row(inst::MATCH_BGEU, inst::MASK_BGEU, bgeu),
     row(inst::MATCH_JAL, inst::MASK_JAL, jal),
 ];
 
@@ -337,6 +342,46 @@ fn jal(word: Word) -> Instruction {
     Instruction::Jal {
         rd: word.rd(),
         offset: word.j_immediate(),
+    }
+}
+
+fn bne(word: Word) -> Instruction {
+    Instruction::Bne {
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+        offset: word.b_immediate(),
+    }
+}
+
+fn blt(word: Word) -> Instruction {
+    Instruction::Blt {
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+        offset: word.b_immediate(),
+    }
+}
+
+fn bge(word: Word) -> Instruction {
+    Instruction::Bge {
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+        offset: word.b_immediate(),
+    }
+}
+
+fn bltu(word: Word) -> Instruction {
+    Instruction::Bltu {
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+        offset: word.b_immediate(),
+    }
+}
+
+fn bgeu(word: Word) -> Instruction {
+    Instruction::Bgeu {
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+        offset: word.b_immediate(),
     }
 }
 

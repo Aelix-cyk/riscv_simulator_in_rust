@@ -9,10 +9,12 @@ use riscv_simulator_in_rust::decode::{Instruction, decode};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
 /// Fixtures whose instructions the renderer is checked against.
-const FIXTURES: [&str; 5] = ["loop.S", "edges.S", "fields.S", "alu.S", "upper.S"];
+const FIXTURES: [&str; 6] = [
+    "loop.S", "edges.S", "fields.S", "alu.S", "upper.S", "branch.S",
+];
 
 /// Legal mnemonics that this milestone does not decode yet.
-const UNIMPLEMENTED: [&str; 3] = ["bne", "lw", "mul"];
+const UNIMPLEMENTED: [&str; 2] = ["lw", "mul"];
 
 #[test]
 fn renderer_matches_objdump_text() {
@@ -50,7 +52,13 @@ fn check_fixture(name: &str) {
         // takes a register-based one.
         let pc_relative = matches!(
             instruction,
-            Instruction::Beq { .. } | Instruction::Jal { .. }
+            Instruction::Beq { .. }
+                | Instruction::Bne { .. }
+                | Instruction::Blt { .. }
+                | Instruction::Bge { .. }
+                | Instruction::Bltu { .. }
+                | Instruction::Bgeu { .. }
+                | Instruction::Jal { .. }
         );
         // `auipc t1,0x1` also contains "pc", so look for the target form.
         let text = instruction.render();
@@ -67,7 +75,13 @@ fn check_fixture(name: &str) {
 fn expected(line: &Disassembled) -> String {
     let operands: Vec<&str> = line.operands.split(',').map(str::trim).collect();
     match line.mnemonic.as_str() {
-        "beq" => format!("beq {},{},{}", operands[0], operands[1], relative(line)),
+        "beq" | "bne" | "blt" | "bge" | "bltu" | "bgeu" => format!(
+            "{} {},{},{}",
+            line.mnemonic,
+            operands[0],
+            operands[1],
+            relative(line)
+        ),
         "jal" => format!("jal {},{}", operands[0], relative(line)),
         mnemonic => format!("{} {}", mnemonic, line.operands),
     }

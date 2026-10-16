@@ -80,6 +80,16 @@ pub enum Instruction {
     Jalr { rd: u8, rs1: u8, offset: i64 },
     /// `beq rs1, rs2, offset` — offset is relative to the instruction address.
     Beq { rs1: u8, rs2: u8, offset: i64 },
+    /// `bne rs1, rs2, offset`
+    Bne { rs1: u8, rs2: u8, offset: i64 },
+    /// `blt rs1, rs2, offset`
+    Blt { rs1: u8, rs2: u8, offset: i64 },
+    /// `bge rs1, rs2, offset`
+    Bge { rs1: u8, rs2: u8, offset: i64 },
+    /// `bltu rs1, rs2, offset`
+    Bltu { rs1: u8, rs2: u8, offset: i64 },
+    /// `bgeu rs1, rs2, offset`
+    Bgeu { rs1: u8, rs2: u8, offset: i64 },
     /// `jal rd, offset` — offset is relative to the instruction address.
     Jal { rd: u8, offset: i64 },
 }
@@ -120,6 +130,11 @@ impl Instruction {
             Instruction::Auipc { .. } => "auipc",
             Instruction::Jalr { .. } => "jalr",
             Instruction::Beq { .. } => "beq",
+            Instruction::Bne { .. } => "bne",
+            Instruction::Blt { .. } => "blt",
+            Instruction::Bge { .. } => "bge",
+            Instruction::Bltu { .. } => "bltu",
+            Instruction::Bgeu { .. } => "bgeu",
             Instruction::Jal { .. } => "jal",
         }
     }
@@ -163,12 +178,12 @@ impl Instruction {
             Instruction::Jalr { rd, rs1, offset } => {
                 format!("jalr {},{}({})", abi_name(rd), offset, abi_name(rs1))
             }
-            Instruction::Beq { rs1, rs2, offset } => format!(
-                "beq {},{},{}",
-                abi_name(rs1),
-                abi_name(rs2),
-                relative(offset)
-            ),
+            Instruction::Beq { rs1, rs2, offset } => branch_op("beq", rs1, rs2, offset),
+            Instruction::Bne { rs1, rs2, offset } => branch_op("bne", rs1, rs2, offset),
+            Instruction::Blt { rs1, rs2, offset } => branch_op("blt", rs1, rs2, offset),
+            Instruction::Bge { rs1, rs2, offset } => branch_op("bge", rs1, rs2, offset),
+            Instruction::Bltu { rs1, rs2, offset } => branch_op("bltu", rs1, rs2, offset),
+            Instruction::Bgeu { rs1, rs2, offset } => branch_op("bgeu", rs1, rs2, offset),
             Instruction::Jal { rd, offset } => {
                 format!("jal {},{}", abi_name(rd), relative(offset))
             }
@@ -193,6 +208,16 @@ fn reg_op(mnemonic: &str, rd: u8, rs1: u8, rs2: u8) -> String {
         abi_name(rd),
         abi_name(rs1),
         abi_name(rs2)
+    )
+}
+
+/// `mnemonic rs1,rs2,pc ± offset`
+fn branch_op(mnemonic: &str, rs1: u8, rs2: u8, offset: i64) -> String {
+    format!(
+        "{mnemonic} {},{},{}",
+        abi_name(rs1),
+        abi_name(rs2),
+        relative(offset)
     )
 }
 
