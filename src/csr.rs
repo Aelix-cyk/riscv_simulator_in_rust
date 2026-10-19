@@ -9,6 +9,11 @@ const MSTATUS_MPIE: u64 = 1 << 7;
 const MSTATUS_MPP_MASK: u64 = 0b11 << 11;
 const MSTATUS_WRITABLE: u64 = MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP_MASK;
 const MACHINE_MODE: u64 = 0b11;
+const MXL_SHIFT: u32 = 62;
+const MXL_64: u64 = 2;
+const MISA_EXT_I_SHIFT: u32 = 8;
+const MISA_EXT_M_SHIFT: u32 = 12;
+const MISA_VALUE: u64 = (MXL_64 << MXL_SHIFT) | (1 << MISA_EXT_I_SHIFT) | (1 << MISA_EXT_M_SHIFT);
 
 /// Architectural machine-mode CSR state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -26,6 +31,7 @@ impl Csrs {
     pub(crate) fn read(self, address: u16) -> Option<u64> {
         match address {
             inst::CSR_MSTATUS => Some(self.mstatus),
+            inst::CSR_MISA => Some(MISA_VALUE),
             inst::CSR_MTVEC => Some(self.mtvec),
             inst::CSR_MSCRATCH => Some(self.mscratch),
             inst::CSR_MEPC => Some(self.mepc),
@@ -114,8 +120,16 @@ mod tests {
     fn unsupported_csrs_are_rejected() {
         let mut csrs = Csrs::default();
 
-        assert_eq!(csrs.read(inst::CSR_MISA), None);
-        assert!(!csrs.write(inst::CSR_MISA, 1));
+        assert_eq!(csrs.read(inst::CSR_MIE), None);
+        assert!(!csrs.write(inst::CSR_MIE, 1));
+    }
+
+    #[test]
+    fn misa_reports_rv64im_and_is_read_only() {
+        let mut csrs = Csrs::default();
+
+        assert_eq!(csrs.read(inst::CSR_MISA), Some(MISA_VALUE));
+        assert!(!csrs.write(inst::CSR_MISA, u64::MAX));
     }
 
     #[test]

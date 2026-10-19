@@ -9,13 +9,13 @@ use riscv_simulator_in_rust::decode::{Instruction, decode};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
 /// Fixtures whose instructions the renderer is checked against.
-const FIXTURES: [&str; 9] = [
+const FIXTURES: [&str; 11] = [
     "loop.S", "edges.S", "fields.S", "alu.S", "upper.S", "branch.S", "memory.S", "fence.S",
-    "trap.S",
+    "trap.S", "mul.S", "div.S",
 ];
 
 /// Legal mnemonics that this milestone does not decode yet.
-const UNIMPLEMENTED: [&str; 1] = ["mul"];
+const UNIMPLEMENTED: [&str; 0] = [];
 
 #[test]
 fn renderer_matches_objdump_text() {

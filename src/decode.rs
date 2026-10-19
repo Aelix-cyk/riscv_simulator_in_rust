@@ -72,6 +72,36 @@ pub enum Instruction {
     /// `sraw rd, rs1, rs2`
     Sraw { rd: u8, rs1: u8, rs2: u8 },
 
+    // M-extension multiplication.
+    /// `mul rd, rs1, rs2`
+    Mul { rd: u8, rs1: u8, rs2: u8 },
+    /// `mulh rd, rs1, rs2`
+    Mulh { rd: u8, rs1: u8, rs2: u8 },
+    /// `mulhsu rd, rs1, rs2`
+    Mulhsu { rd: u8, rs1: u8, rs2: u8 },
+    /// `mulhu rd, rs1, rs2`
+    Mulhu { rd: u8, rs1: u8, rs2: u8 },
+    /// `mulw rd, rs1, rs2`
+    Mulw { rd: u8, rs1: u8, rs2: u8 },
+
+    // M-extension division and remainder.
+    /// `div rd, rs1, rs2`
+    Div { rd: u8, rs1: u8, rs2: u8 },
+    /// `divu rd, rs1, rs2`
+    Divu { rd: u8, rs1: u8, rs2: u8 },
+    /// `rem rd, rs1, rs2`
+    Rem { rd: u8, rs1: u8, rs2: u8 },
+    /// `remu rd, rs1, rs2`
+    Remu { rd: u8, rs1: u8, rs2: u8 },
+    /// `divw rd, rs1, rs2`
+    Divw { rd: u8, rs1: u8, rs2: u8 },
+    /// `divuw rd, rs1, rs2`
+    Divuw { rd: u8, rs1: u8, rs2: u8 },
+    /// `remw rd, rs1, rs2`
+    Remw { rd: u8, rs1: u8, rs2: u8 },
+    /// `remuw rd, rs1, rs2`
+    Remuw { rd: u8, rs1: u8, rs2: u8 },
+
     // Loads.
     /// `lb rd, offset(rs1)`
     Lb { rd: u8, rs1: u8, offset: i64 },
@@ -181,6 +211,19 @@ impl Instruction {
             Instruction::Sllw { .. } => "sllw",
             Instruction::Srlw { .. } => "srlw",
             Instruction::Sraw { .. } => "sraw",
+            Instruction::Mul { .. } => "mul",
+            Instruction::Mulh { .. } => "mulh",
+            Instruction::Mulhsu { .. } => "mulhsu",
+            Instruction::Mulhu { .. } => "mulhu",
+            Instruction::Mulw { .. } => "mulw",
+            Instruction::Div { .. } => "div",
+            Instruction::Divu { .. } => "divu",
+            Instruction::Rem { .. } => "rem",
+            Instruction::Remu { .. } => "remu",
+            Instruction::Divw { .. } => "divw",
+            Instruction::Divuw { .. } => "divuw",
+            Instruction::Remw { .. } => "remw",
+            Instruction::Remuw { .. } => "remuw",
             Instruction::Lb { .. } => "lb",
             Instruction::Lh { .. } => "lh",
             Instruction::Lw { .. } => "lw",
@@ -248,6 +291,19 @@ impl Instruction {
             Instruction::Sllw { rd, rs1, rs2 } => reg_op("sllw", rd, rs1, rs2),
             Instruction::Srlw { rd, rs1, rs2 } => reg_op("srlw", rd, rs1, rs2),
             Instruction::Sraw { rd, rs1, rs2 } => reg_op("sraw", rd, rs1, rs2),
+            Instruction::Mul { rd, rs1, rs2 } => reg_op("mul", rd, rs1, rs2),
+            Instruction::Mulh { rd, rs1, rs2 } => reg_op("mulh", rd, rs1, rs2),
+            Instruction::Mulhsu { rd, rs1, rs2 } => reg_op("mulhsu", rd, rs1, rs2),
+            Instruction::Mulhu { rd, rs1, rs2 } => reg_op("mulhu", rd, rs1, rs2),
+            Instruction::Mulw { rd, rs1, rs2 } => reg_op("mulw", rd, rs1, rs2),
+            Instruction::Div { rd, rs1, rs2 } => reg_op("div", rd, rs1, rs2),
+            Instruction::Divu { rd, rs1, rs2 } => reg_op("divu", rd, rs1, rs2),
+            Instruction::Rem { rd, rs1, rs2 } => reg_op("rem", rd, rs1, rs2),
+            Instruction::Remu { rd, rs1, rs2 } => reg_op("remu", rd, rs1, rs2),
+            Instruction::Divw { rd, rs1, rs2 } => reg_op("divw", rd, rs1, rs2),
+            Instruction::Divuw { rd, rs1, rs2 } => reg_op("divuw", rd, rs1, rs2),
+            Instruction::Remw { rd, rs1, rs2 } => reg_op("remw", rd, rs1, rs2),
+            Instruction::Remuw { rd, rs1, rs2 } => reg_op("remuw", rd, rs1, rs2),
             Instruction::Lb { rd, rs1, offset } => load_op("lb", rd, rs1, offset),
             Instruction::Lh { rd, rs1, offset } => load_op("lh", rd, rs1, offset),
             Instruction::Lw { rd, rs1, offset } => load_op("lw", rd, rs1, offset),
@@ -351,6 +407,7 @@ fn csr_imm_op(mnemonic: &str, rd: u8, csr: u16, zimm: u8) -> String {
 fn csr_name(csr: u16) -> String {
     match csr {
         inst::CSR_MSTATUS => "mstatus".to_owned(),
+        inst::CSR_MISA => "misa".to_owned(),
         inst::CSR_MTVEC => "mtvec".to_owned(),
         inst::CSR_MSCRATCH => "mscratch".to_owned(),
         inst::CSR_MEPC => "mepc".to_owned(),

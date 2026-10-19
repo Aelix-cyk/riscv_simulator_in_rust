@@ -4,14 +4,15 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 
 ## Status
 
-A 64-bit hart that executes all of RV64I plus Zicsr — the integer ALU operations,
-the six conditional branches, `lui`/`auipc`/`jal`/`jalr`, every load and store,
+A 64-bit hart that executes RV64IM plus Zicsr — the integer ALU operations, all
+integer multiply/divide instructions, branches, jumps, loads and stores,
 `fence`/`fence.i`, and the six CSR read/modify/write forms. Synchronous exceptions,
-including `ecall` and `ebreak`, enter a machine-mode handler through `mtvec`; the
-implemented CSRs are `mstatus`, `mtvec`, `mscratch`, `mepc`, `mcause`, and `mtval`.
-The target profile is RVA22S64, built up progressively: see `GLOSSARY.md` for
-terminology, `docs/impl-choices/` for the requirements and the choices the
-specification leaves open, and `docs/notes/` for working notes.
+including `ecall` and `ebreak`, enter a machine-mode handler through `mtvec`.
+Implemented CSRs include read-only `misa` (RV64IM), `mstatus`, `mtvec`, `mscratch`,
+`mepc`, `mcause`, and `mtval`. The target profile is RVA22S64, built up
+progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
+requirements and the choices the specification leaves open, and `docs/notes/` for
+working notes.
 
 ## Usage
 

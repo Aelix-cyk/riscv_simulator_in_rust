@@ -66,6 +66,20 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_SLLW, inst::MASK_SLLW, sllw),
     row(inst::MATCH_SRLW, inst::MASK_SRLW, srlw),
     row(inst::MATCH_SRAW, inst::MASK_SRAW, sraw),
+    // M-extension multiplication.
+    row(inst::MATCH_MUL, inst::MASK_MUL, mul),
+    row(inst::MATCH_MULH, inst::MASK_MULH, mulh),
+    row(inst::MATCH_MULHSU, inst::MASK_MULHSU, mulhsu),
+    row(inst::MATCH_MULHU, inst::MASK_MULHU, mulhu),
+    row(inst::MATCH_MULW, inst::MASK_MULW, mulw),
+    row(inst::MATCH_DIV, inst::MASK_DIV, div),
+    row(inst::MATCH_DIVU, inst::MASK_DIVU, divu),
+    row(inst::MATCH_REM, inst::MASK_REM, rem),
+    row(inst::MATCH_REMU, inst::MASK_REMU, remu),
+    row(inst::MATCH_DIVW, inst::MASK_DIVW, divw),
+    row(inst::MATCH_DIVUW, inst::MASK_DIVUW, divuw),
+    row(inst::MATCH_REMW, inst::MASK_REMW, remw),
+    row(inst::MATCH_REMUW, inst::MASK_REMUW, remuw),
     // Control transfers.
     row(inst::MATCH_LUI, inst::MASK_LUI, lui),
     row(inst::MATCH_AUIPC, inst::MASK_AUIPC, auipc),
@@ -329,6 +343,110 @@ fn srlw(word: Word) -> Instruction {
 
 fn sraw(word: Word) -> Instruction {
     Instruction::Sraw {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn mul(word: Word) -> Instruction {
+    Instruction::Mul {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn mulh(word: Word) -> Instruction {
+    Instruction::Mulh {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn mulhsu(word: Word) -> Instruction {
+    Instruction::Mulhsu {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn mulhu(word: Word) -> Instruction {
+    Instruction::Mulhu {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn mulw(word: Word) -> Instruction {
+    Instruction::Mulw {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn div(word: Word) -> Instruction {
+    Instruction::Div {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn divu(word: Word) -> Instruction {
+    Instruction::Divu {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn rem(word: Word) -> Instruction {
+    Instruction::Rem {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn remu(word: Word) -> Instruction {
+    Instruction::Remu {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn divw(word: Word) -> Instruction {
+    Instruction::Divw {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn divuw(word: Word) -> Instruction {
+    Instruction::Divuw {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn remw(word: Word) -> Instruction {
+    Instruction::Remw {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn remuw(word: Word) -> Instruction {
+    Instruction::Remuw {
         rd: word.rd(),
         rs1: word.rs1(),
         rs2: word.rs2(),
@@ -611,7 +729,7 @@ mod tests {
     #[test]
     fn unimplemented_instructions_do_not_decode() {
         // Legal encodings that later milestones will implement.
-        for code in [inst::MATCH_MUL, inst::MATCH_SRET] {
+        for code in [inst::MATCH_AMOADD_W, inst::MATCH_SRET] {
             assert_eq!(decode(code), Err(Trap::IllegalInstruction), "{code:#010x}");
         }
     }

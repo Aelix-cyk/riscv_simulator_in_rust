@@ -9,13 +9,13 @@ use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 use riscv_simulator_in_rust::trap::Trap;
 
 /// Fixtures whose instruction stream the decoder is checked against.
-const FIXTURES: [&str; 9] = [
+const FIXTURES: [&str; 11] = [
     "loop.S", "edges.S", "fields.S", "alu.S", "upper.S", "branch.S", "memory.S", "fence.S",
-    "trap.S",
+    "trap.S", "mul.S", "div.S",
 ];
 
 /// Legal mnemonics that this milestone does not decode yet.
-const UNIMPLEMENTED: [&str; 1] = ["mul"];
+const UNIMPLEMENTED: [&str; 0] = [];
 
 #[test]
 fn decoder_mnemonics_match_objdump() {

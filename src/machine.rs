@@ -277,6 +277,87 @@ impl<B: Bus> Machine<B> {
                 let value = ((self.gpr(rs1) as u32) as i32) >> shift_32(self.gpr(rs2));
                 self.write(rd, sign_extend_32(u64::from(value as u32)));
             }
+            Instruction::Mul { rd, rs1, rs2 } => {
+                self.write(rd, self.gpr(rs1).wrapping_mul(self.gpr(rs2)));
+            }
+            Instruction::Mulh { rd, rs1, rs2 } => {
+                let value = i128::from(self.gpr(rs1) as i64) * i128::from(self.gpr(rs2) as i64);
+                self.write(rd, (value >> 64) as u64);
+            }
+            Instruction::Mulhsu { rd, rs1, rs2 } => {
+                let value = i128::from(self.gpr(rs1) as i64) * i128::from(self.gpr(rs2));
+                self.write(rd, (value >> 64) as u64);
+            }
+            Instruction::Mulhu { rd, rs1, rs2 } => {
+                let value = u128::from(self.gpr(rs1)) * u128::from(self.gpr(rs2));
+                self.write(rd, (value >> 64) as u64);
+            }
+            Instruction::Mulw { rd, rs1, rs2 } => {
+                let value = (self.gpr(rs1) as u32).wrapping_mul(self.gpr(rs2) as u32);
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Div { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1) as i64;
+                let divisor = self.gpr(rs2) as i64;
+                let value = dividend.checked_div(divisor).unwrap_or(if divisor == 0 {
+                    -1
+                } else {
+                    i64::MIN
+                });
+                self.write(rd, value as u64);
+            }
+            Instruction::Divu { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1);
+                let divisor = self.gpr(rs2);
+                self.write(rd, dividend.checked_div(divisor).unwrap_or(u64::MAX));
+            }
+            Instruction::Rem { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1) as i64;
+                let divisor = self.gpr(rs2) as i64;
+                let value = dividend.checked_rem(divisor).unwrap_or(if divisor == 0 {
+                    dividend
+                } else {
+                    0
+                });
+                self.write(rd, value as u64);
+            }
+            Instruction::Remu { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1);
+                let divisor = self.gpr(rs2);
+                self.write(rd, dividend.checked_rem(divisor).unwrap_or(dividend));
+            }
+            Instruction::Divw { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1) as u32 as i32;
+                let divisor = self.gpr(rs2) as u32 as i32;
+                let value = dividend.checked_div(divisor).unwrap_or(if divisor == 0 {
+                    -1
+                } else {
+                    i32::MIN
+                });
+                self.write(rd, sign_extend_32(u64::from(value as u32)));
+            }
+            Instruction::Divuw { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1) as u32;
+                let divisor = self.gpr(rs2) as u32;
+                let value = dividend.checked_div(divisor).unwrap_or(u32::MAX);
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Remw { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1) as u32 as i32;
+                let divisor = self.gpr(rs2) as u32 as i32;
+                let value = dividend.checked_rem(divisor).unwrap_or(if divisor == 0 {
+                    dividend
+                } else {
+                    0
+                });
+                self.write(rd, sign_extend_32(u64::from(value as u32)));
+            }
+            Instruction::Remuw { rd, rs1, rs2 } => {
+                let dividend = self.gpr(rs1) as u32;
+                let divisor = self.gpr(rs2) as u32;
+                let value = dividend.checked_rem(divisor).unwrap_or(dividend);
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
             Instruction::Lb { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
@@ -369,14 +450,14 @@ impl<B: Bus> Machine<B> {
             Instruction::Csrrw { rd, csr, rs1 } => {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
-                self.cpu.write_csr(csr, source);
+                self.write_csr(csr, source, word)?;
                 self.write(rd, old);
             }
             Instruction::Csrrs { rd, csr, rs1 } => {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
                 if source != 0 {
-                    self.cpu.write_csr(csr, old | source);
+                    self.write_csr(csr, old | source, word)?;
                 }
                 self.write(rd, old);
             }
@@ -384,26 +465,26 @@ impl<B: Bus> Machine<B> {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
                 if source != 0 {
-                    self.cpu.write_csr(csr, old & !source);
+                    self.write_csr(csr, old & !source, word)?;
                 }
                 self.write(rd, old);
             }
             Instruction::Csrrwi { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
-                self.cpu.write_csr(csr, u64::from(zimm));
+                self.write_csr(csr, u64::from(zimm), word)?;
                 self.write(rd, old);
             }
             Instruction::Csrrsi { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
                 if zimm != 0 {
-                    self.cpu.write_csr(csr, old | u64::from(zimm));
+                    self.write_csr(csr, old | u64::from(zimm), word)?;
                 }
                 self.write(rd, old);
             }
             Instruction::Csrrci { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
                 if zimm != 0 {
-                    self.cpu.write_csr(csr, old & !u64::from(zimm));
+                    self.write_csr(csr, old & !u64::from(zimm), word)?;
                 }
                 self.write(rd, old);
             }
@@ -487,6 +568,18 @@ impl<B: Bus> Machine<B> {
             inst::CAUSE_ILLEGAL_INSTRUCTION,
             u64::from(word),
         ))
+    }
+
+    /// Writes a CSR or raises the illegal-instruction exception.
+    fn write_csr(&mut self, address: u16, value: u64, word: u32) -> Result<(), Exception> {
+        if self.cpu.write_csr(address, value) {
+            Ok(())
+        } else {
+            Err(Exception::new(
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                u64::from(word),
+            ))
+        }
     }
 
     /// Checks that a control-transfer target is four-byte aligned.
@@ -626,6 +719,187 @@ mod tests {
 
         assert_eq!(machine.cpu().read_gpr(7), 7);
         assert_eq!(machine.cpu().pc(), 4);
+    }
+
+    #[test]
+    fn multiply_high_halves_obey_operand_signedness() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, i64::MIN as u64);
+        machine.cpu_mut().write_gpr(6, 2);
+        let cases = [
+            (
+                Instruction::Mul {
+                    rd: 7,
+                    rs1: 5,
+                    rs2: 6,
+                },
+                0,
+            ),
+            (
+                Instruction::Mulh {
+                    rd: 7,
+                    rs1: 5,
+                    rs2: 6,
+                },
+                u64::MAX,
+            ),
+            (
+                Instruction::Mulhsu {
+                    rd: 7,
+                    rs1: 5,
+                    rs2: 6,
+                },
+                u64::MAX,
+            ),
+            (
+                Instruction::Mulhu {
+                    rd: 7,
+                    rs1: 5,
+                    rs2: 6,
+                },
+                1,
+            ),
+        ];
+
+        for (instruction, expected) in cases {
+            machine.execute(instruction);
+            assert_eq!(machine.cpu().read_gpr(7), expected, "{instruction:?}");
+        }
+    }
+
+    #[test]
+    fn mulw_uses_the_low_word_and_sign_extends() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 0x0000_0001_0000_0002);
+        machine.cpu_mut().write_gpr(6, u64::MAX);
+
+        machine.execute(Instruction::Mulw {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(7), u64::MAX - 1);
+    }
+
+    #[test]
+    fn divide_and_remainder_handle_signedness_zero_and_overflow() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, (-7_i64) as u64);
+        machine.cpu_mut().write_gpr(6, 3);
+
+        machine.execute(Instruction::Div {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Rem {
+            rd: 8,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Divu {
+            rd: 9,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Remu {
+            rd: 10,
+            rs1: 5,
+            rs2: 6,
+        });
+        assert_eq!(machine.cpu().read_gpr(7), (-2_i64) as u64);
+        assert_eq!(machine.cpu().read_gpr(8), u64::MAX);
+        assert_eq!(machine.cpu().read_gpr(9), (u64::MAX - 6) / 3);
+        assert_eq!(machine.cpu().read_gpr(10), 0);
+
+        machine.cpu_mut().write_gpr(5, i64::MIN as u64);
+        machine.cpu_mut().write_gpr(6, u64::MAX);
+        machine.execute(Instruction::Div {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Rem {
+            rd: 8,
+            rs1: 5,
+            rs2: 6,
+        });
+        assert_eq!(machine.cpu().read_gpr(7), i64::MIN as u64);
+        assert_eq!(machine.cpu().read_gpr(8), 0);
+
+        machine.cpu_mut().write_gpr(5, (-7_i64) as u64);
+        machine.cpu_mut().write_gpr(6, 0);
+        machine.execute(Instruction::Div {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Rem {
+            rd: 8,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Divu {
+            rd: 9,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Remu {
+            rd: 10,
+            rs1: 5,
+            rs2: 6,
+        });
+        assert_eq!(machine.cpu().read_gpr(7), u64::MAX);
+        assert_eq!(machine.cpu().read_gpr(8), (-7_i64) as u64);
+        assert_eq!(machine.cpu().read_gpr(9), u64::MAX);
+        assert_eq!(machine.cpu().read_gpr(10), (-7_i64) as u64);
+    }
+
+    #[test]
+    fn division_word_forms_sign_extend_and_handle_zero() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 0x8000_0000);
+        machine.cpu_mut().write_gpr(6, u64::MAX);
+
+        machine.execute(Instruction::Divw {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Remw {
+            rd: 8,
+            rs1: 5,
+            rs2: 6,
+        });
+        assert_eq!(machine.cpu().read_gpr(7), 0xffff_ffff_8000_0000);
+        assert_eq!(machine.cpu().read_gpr(8), 0);
+
+        machine.cpu_mut().write_gpr(6, 0);
+        machine.execute(Instruction::Divw {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Divuw {
+            rd: 8,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Remw {
+            rd: 9,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Remuw {
+            rd: 10,
+            rs1: 5,
+            rs2: 6,
+        });
+        assert_eq!(machine.cpu().read_gpr(7), u64::MAX);
+        assert_eq!(machine.cpu().read_gpr(8), u64::MAX);
+        assert_eq!(machine.cpu().read_gpr(9), 0xffff_ffff_8000_0000);
+        assert_eq!(machine.cpu().read_gpr(10), 0xffff_ffff_8000_0000);
     }
 
     #[test]
@@ -1097,6 +1371,37 @@ mod tests {
     }
 
     #[test]
+    fn misa_reports_rv64im_and_rejects_writes_precisely() {
+        let mut machine = trapped_machine();
+        machine.execute(Instruction::Csrrs {
+            rd: 5,
+            csr: inst::CSR_MISA,
+            rs1: 0,
+        });
+        let misa = machine.cpu().read_gpr(5);
+        assert_eq!(misa >> 62, 2, "MXL");
+        assert_ne!(misa & (1 << 8), 0, "I extension");
+        assert_ne!(misa & (1 << 12), 0, "M extension");
+
+        let instruction = Instruction::Csrrw {
+            rd: 5,
+            csr: inst::CSR_MISA,
+            rs1: 6,
+        };
+        machine.cpu_mut().write_gpr(5, 7);
+        machine.cpu_mut().write_gpr(6, 0);
+        machine.execute(instruction);
+
+        assert_eq!(machine.cpu().read_gpr(5), 7, "rd must not change");
+        assert_trap(
+            &machine,
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(instruction_word(instruction)),
+            4,
+        );
+    }
+
+    #[test]
     fn csr_instruction_words_round_trip_through_generated_encodings() {
         for word in [
             0x3003_12f3,
@@ -1179,7 +1484,7 @@ mod tests {
     fn unsupported_csr_traps_before_writing_rd_or_csr_state() {
         let instruction = Instruction::Csrrs {
             rd: 5,
-            csr: inst::CSR_MISA,
+            csr: inst::CSR_MIE,
             rs1: 0,
         };
         let mut machine = trapped_machine();

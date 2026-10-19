@@ -1,5 +1,5 @@
-# Distinct register numbers for field assertions, plus a legal M-extension
-# encoding the decoder does not support yet. Used by tests/decode.rs.
+# Distinct register numbers for field assertions, including an RV64M encoding.
+# Used by tests/decode.rs.
 	.text
 	.globl _start
 _start:
@@ -13,6 +13,6 @@ fwd:
 	bne	x10, x11, end
 	jal	x1, end
 	lw	x5, 0(x6)
-	mul	x7, x8, x9          # legal M extension, not decoded yet
+	mul	x7, x8, x9
 end:
 	jal	x0, end
