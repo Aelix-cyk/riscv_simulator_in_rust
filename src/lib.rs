@@ -3,6 +3,7 @@
 pub mod bus;
 pub mod cli;
 pub mod cpu;
+pub(crate) mod csr;
 pub mod decode;
 pub(crate) mod inst;
 pub mod machine;

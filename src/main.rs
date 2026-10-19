@@ -6,15 +6,11 @@ use std::process::ExitCode;
 use riscv_simulator_in_rust::bus::Bus;
 use riscv_simulator_in_rust::cli::{self, Command, Options, USAGE};
 use riscv_simulator_in_rust::cpu::{ABI_NAMES, Cpu};
-use riscv_simulator_in_rust::machine::{Machine, RunOutcome};
+use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
-use riscv_simulator_in_rust::trap::Trap;
 
 /// Exit code for usage and input errors.
 const EXIT_USAGE: u8 = 2;
-
-/// Exit code for a program that trapped.
-const EXIT_TRAP: u8 = 1;
 
 /// Exit code for a run that stopped at its step limit.
 const EXIT_STEP_LIMIT: u8 = 2;
@@ -58,16 +54,9 @@ fn run(options: &Options) -> ExitCode {
         if steps == options.max_steps {
             break RunOutcome::StepLimitReached;
         }
-        let instruction = match machine.fetch() {
-            Ok(instruction) => instruction,
-            Err(trap) => return trapped(trap),
-        };
-        if options.trace {
-            println!("{:#010x}  {}", machine.cpu().pc(), instruction.render());
-        }
-        if let Err(trap) = machine.execute(instruction) {
-            return trapped(trap);
-        }
+        machine.step(StepOptions {
+            trace: options.trace,
+        });
         steps += 1;
         if machine.halted() {
             break RunOutcome::Halted;
@@ -84,12 +73,6 @@ fn run(options: &Options) -> ExitCode {
             ExitCode::from(EXIT_STEP_LIMIT)
         }
     }
-}
-
-/// Reports a trap on stderr and returns its exit code.
-fn trapped(trap: Trap) -> ExitCode {
-    eprintln!("trap: {trap:?}");
-    ExitCode::from(EXIT_TRAP)
 }
 
 /// Prints the general-purpose registers by ABI name.

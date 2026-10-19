@@ -1,5 +1,7 @@
 //! Architectural state of a single hart.
 
+use crate::csr::Csrs;
+
 /// Number of general-purpose (integer) registers in the base ISA.
 pub const GPR_COUNT: usize = 32;
 
@@ -23,6 +25,7 @@ pub fn abi_name(index: u8) -> &'static str {
 pub struct Cpu {
     gprs: [u64; GPR_COUNT],
     pc: u64,
+    csrs: Csrs,
 }
 
 impl Cpu {
@@ -31,6 +34,7 @@ impl Cpu {
         Self {
             gprs: [0; GPR_COUNT],
             pc: 0,
+            csrs: Csrs::default(),
         }
     }
 
@@ -54,6 +58,26 @@ impl Cpu {
         if index != X0 {
             self.gprs[index] = value;
         }
+    }
+
+    /// Reads an implemented CSR, or returns `None` for an unsupported address.
+    pub fn read_csr(&self, address: u16) -> Option<u64> {
+        self.csrs.read(address)
+    }
+
+    /// Writes an implemented CSR and reports whether the address was valid.
+    pub(crate) fn write_csr(&mut self, address: u16, value: u64) -> bool {
+        self.csrs.write(address, value)
+    }
+
+    /// Immutable CSR state for trap delivery.
+    pub(crate) fn csrs(&self) -> &Csrs {
+        &self.csrs
+    }
+
+    /// Mutable CSR state for trap delivery.
+    pub(crate) fn csrs_mut(&mut self) -> &mut Csrs {
+        &mut self.csrs
     }
 }
 

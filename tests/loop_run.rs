@@ -17,7 +17,7 @@ fn loop_fixture_halts_with_spike_state() {
         .load_bytes(DRAM_BASE, &program.binary)
         .unwrap();
 
-    let outcome = machine.run(1_000).unwrap();
+    let outcome = machine.run(1_000);
 
     assert_eq!(outcome, RunOutcome::Halted);
     assert_eq!(machine.cpu().pc(), program.halt_address());
@@ -46,5 +46,5 @@ fn spin_fixture_stops_at_the_step_limit() {
         .load_bytes(DRAM_BASE, &program.binary)
         .unwrap();
 
-    assert_eq!(machine.run(3).unwrap(), RunOutcome::StepLimitReached);
+    assert_eq!(machine.run(3), RunOutcome::StepLimitReached);
 }

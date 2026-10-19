@@ -34,13 +34,13 @@ fn main() {
         .unwrap();
 
     for instruction in &instructions {
-        machine.execute(*instruction).unwrap();
+        machine.execute(*instruction);
     }
 
     report("execute", || {
         for index in 0..ITERATIONS {
             let instruction = black_box(instructions[index as usize % instructions.len()]);
-            machine.execute(instruction).unwrap();
+            machine.execute(instruction);
         }
     });
 
@@ -48,7 +48,7 @@ fn main() {
         for index in 0..ITERATIONS {
             let word = black_box(words[index as usize % words.len()]);
             if let Ok(instruction) = decode(word) {
-                machine.execute(instruction).unwrap();
+                machine.execute(instruction);
             }
         }
     });

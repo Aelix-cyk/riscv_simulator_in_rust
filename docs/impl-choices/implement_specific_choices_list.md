@@ -36,12 +36,12 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| Trap vector base and alignment | `mtvec`/`stvec` absent; Sstvecd will require Direct mode and any 4-byte-aligned base | Open |
+| Trap vector base and alignment | `mtvec` implemented in Direct mode; base writes are masked to 4-byte alignment. `stvec` remains absent | Decided for M-mode |
 | Interrupt controller | None | Open |
 | Timer facility | None; the profile deliberately leaves Sstc optional | Open |
 | Number of hardware performance counters | `Zihpm` is mandatory, but the count is a choice | Open |
-| `WFI` and `PAUSE` behaviour | Not implemented (no Zicsr yet); the profile allows `PAUSE` to execute as a NOP | Open |
-| Behaviour on unimplemented opcodes | Illegal-instruction exception | Decided |
+| `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; the profile allows `PAUSE` to execute as a NOP | Open |
+| Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
 
 ## 4. Debug
 
@@ -72,7 +72,7 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 |---|---|---|
 | Program container | Flat binary, loaded at `DRAM_BASE` | Decided |
 | Program start | Entry is the load address; the CLI sets the PC there | Decided |
-| Halt and exit signalling | Halt self-loop, `jal x0, 0`; `ecall` will replace it once CSRs exist | Decided (temporary) |
+| Halt and exit signalling | Halt self-loop, `jal x0, 0`; `ecall` enters the machine trap handler | Decided (temporary) |
 | Host I/O | None yet; no `tohost`/`fromhost` symbols | Open |
 
 ## 7. Optional extensions

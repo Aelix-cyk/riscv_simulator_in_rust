@@ -8,7 +8,9 @@ use riscv_simulator_in_rust::machine::{Machine, RunOutcome};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
 /// Fixtures that run to the halt self-loop.
-const FIXTURES: [&str; 5] = ["alu.S", "upper.S", "branch.S", "memory.S", "fence.S"];
+const FIXTURES: [&str; 6] = [
+    "alu.S", "upper.S", "branch.S", "memory.S", "fence.S", "trap.S",
+];
 
 #[test]
 fn fixtures_match_spike() {
@@ -28,7 +30,7 @@ fn check_fixture(name: &str) {
         .unwrap();
 
     assert_eq!(
-        machine.run(10_000).unwrap(),
+        machine.run(10_000),
         RunOutcome::Halted,
         "{name} did not halt"
     );

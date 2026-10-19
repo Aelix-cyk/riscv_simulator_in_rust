@@ -93,6 +93,17 @@ const TABLE: &[Row] = &[
     // Ordering.
     row(inst::MATCH_FENCE, inst::MASK_FENCE, fence),
     row(inst::MATCH_FENCE_I, inst::MASK_FENCE_I, fence_i),
+    // Zicsr.
+    row(inst::MATCH_CSRRW, inst::MASK_CSRRW, csrrw),
+    row(inst::MATCH_CSRRS, inst::MASK_CSRRS, csrrs),
+    row(inst::MATCH_CSRRC, inst::MASK_CSRRC, csrrc),
+    row(inst::MATCH_CSRRWI, inst::MASK_CSRRWI, csrrwi),
+    row(inst::MATCH_CSRRSI, inst::MASK_CSRRSI, csrrsi),
+    row(inst::MATCH_CSRRCI, inst::MASK_CSRRCI, csrrci),
+    // Machine-mode system instructions.
+    row(inst::MATCH_ECALL, inst::MASK_ECALL, ecall),
+    row(inst::MATCH_EBREAK, inst::MASK_EBREAK, ebreak),
+    row(inst::MATCH_MRET, inst::MASK_MRET, mret),
 ];
 
 /// Builds a table row.
@@ -500,6 +511,66 @@ fn fence_i(_word: Word) -> Instruction {
     Instruction::FenceI
 }
 
+fn csrrw(word: Word) -> Instruction {
+    Instruction::Csrrw {
+        rd: word.rd(),
+        csr: word.csr(),
+        rs1: word.rs1(),
+    }
+}
+
+fn csrrs(word: Word) -> Instruction {
+    Instruction::Csrrs {
+        rd: word.rd(),
+        csr: word.csr(),
+        rs1: word.rs1(),
+    }
+}
+
+fn csrrc(word: Word) -> Instruction {
+    Instruction::Csrrc {
+        rd: word.rd(),
+        csr: word.csr(),
+        rs1: word.rs1(),
+    }
+}
+
+fn csrrwi(word: Word) -> Instruction {
+    Instruction::Csrrwi {
+        rd: word.rd(),
+        csr: word.csr(),
+        zimm: word.zimm(),
+    }
+}
+
+fn csrrsi(word: Word) -> Instruction {
+    Instruction::Csrrsi {
+        rd: word.rd(),
+        csr: word.csr(),
+        zimm: word.zimm(),
+    }
+}
+
+fn csrrci(word: Word) -> Instruction {
+    Instruction::Csrrci {
+        rd: word.rd(),
+        csr: word.csr(),
+        zimm: word.zimm(),
+    }
+}
+
+fn ecall(_word: Word) -> Instruction {
+    Instruction::Ecall
+}
+
+fn ebreak(_word: Word) -> Instruction {
+    Instruction::Ebreak
+}
+
+fn mret(_word: Word) -> Instruction {
+    Instruction::Mret
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,9 +610,8 @@ mod tests {
 
     #[test]
     fn unimplemented_instructions_do_not_decode() {
-        // Legal encodings that this milestone does not run: the M extension, and
-        // the system instructions that wait for the trap milestone.
-        for code in [inst::MATCH_MUL, inst::MATCH_ECALL, inst::MATCH_EBREAK] {
+        // Legal encodings that later milestones will implement.
+        for code in [inst::MATCH_MUL, inst::MATCH_SRET] {
             assert_eq!(decode(code), Err(Trap::IllegalInstruction), "{code:#010x}");
         }
     }

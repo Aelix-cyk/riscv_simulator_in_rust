@@ -1,6 +1,7 @@
 //! Instruction decoding.
 
 use crate::cpu::abi_name;
+use crate::inst;
 use crate::opcodes;
 use crate::trap::Trap;
 
@@ -103,6 +104,28 @@ pub enum Instruction {
     /// `fence.i` — instruction-fetch fence, from Zifencei.
     FenceI,
 
+    // Zicsr.
+    /// `csrrw rd, csr, rs1`
+    Csrrw { rd: u8, csr: u16, rs1: u8 },
+    /// `csrrs rd, csr, rs1`
+    Csrrs { rd: u8, csr: u16, rs1: u8 },
+    /// `csrrc rd, csr, rs1`
+    Csrrc { rd: u8, csr: u16, rs1: u8 },
+    /// `csrrwi rd, csr, zimm`
+    Csrrwi { rd: u8, csr: u16, zimm: u8 },
+    /// `csrrsi rd, csr, zimm`
+    Csrrsi { rd: u8, csr: u16, zimm: u8 },
+    /// `csrrci rd, csr, zimm`
+    Csrrci { rd: u8, csr: u16, zimm: u8 },
+
+    // Machine-mode system instructions.
+    /// `ecall`
+    Ecall,
+    /// `ebreak`
+    Ebreak,
+    /// `mret`
+    Mret,
+
     // Control transfers.
     /// `lui rd, imm` — `imm` is the value after the 12-bit shift.
     Lui { rd: u8, imm: i64 },
@@ -171,6 +194,15 @@ impl Instruction {
             Instruction::Sd { .. } => "sd",
             Instruction::Fence { .. } => "fence",
             Instruction::FenceI => "fence.i",
+            Instruction::Csrrw { .. } => "csrrw",
+            Instruction::Csrrs { .. } => "csrrs",
+            Instruction::Csrrc { .. } => "csrrc",
+            Instruction::Csrrwi { .. } => "csrrwi",
+            Instruction::Csrrsi { .. } => "csrrsi",
+            Instruction::Csrrci { .. } => "csrrci",
+            Instruction::Ecall => "ecall",
+            Instruction::Ebreak => "ebreak",
+            Instruction::Mret => "mret",
             Instruction::Lui { .. } => "lui",
             Instruction::Auipc { .. } => "auipc",
             Instruction::Jalr { .. } => "jalr",
@@ -231,6 +263,15 @@ impl Instruction {
                 format!("fence {},{}", fence_set(pred), fence_set(succ))
             }
             Instruction::FenceI => "fence.i".to_owned(),
+            Instruction::Csrrw { rd, csr, rs1 } => csr_reg_op("csrrw", rd, csr, rs1),
+            Instruction::Csrrs { rd, csr, rs1 } => csr_reg_op("csrrs", rd, csr, rs1),
+            Instruction::Csrrc { rd, csr, rs1 } => csr_reg_op("csrrc", rd, csr, rs1),
+            Instruction::Csrrwi { rd, csr, zimm } => csr_imm_op("csrrwi", rd, csr, zimm),
+            Instruction::Csrrsi { rd, csr, zimm } => csr_imm_op("csrrsi", rd, csr, zimm),
+            Instruction::Csrrci { rd, csr, zimm } => csr_imm_op("csrrci", rd, csr, zimm),
+            Instruction::Ecall => "ecall".to_owned(),
+            Instruction::Ebreak => "ebreak".to_owned(),
+            Instruction::Mret => "mret".to_owned(),
             Instruction::Lui { rd, imm } => format!("lui {},{:#x}", abi_name(rd), u_field(imm)),
             Instruction::Auipc { rd, imm } => {
                 format!("auipc {},{:#x}", abi_name(rd), u_field(imm))
@@ -289,6 +330,34 @@ fn load_op(mnemonic: &str, rd: u8, rs1: u8, offset: i64) -> String {
 /// `mnemonic rs2,offset(rs1)`
 fn store_op(mnemonic: &str, rs2: u8, rs1: u8, offset: i64) -> String {
     format!("{mnemonic} {},{offset}({})", abi_name(rs2), abi_name(rs1))
+}
+
+/// `mnemonic rd,csr,rs1`
+fn csr_reg_op(mnemonic: &str, rd: u8, csr: u16, rs1: u8) -> String {
+    format!(
+        "{mnemonic} {},{},{}",
+        abi_name(rd),
+        csr_name(csr),
+        abi_name(rs1)
+    )
+}
+
+/// `mnemonic rd,csr,zimm`
+fn csr_imm_op(mnemonic: &str, rd: u8, csr: u16, zimm: u8) -> String {
+    format!("{mnemonic} {},{},{zimm}", abi_name(rd), csr_name(csr))
+}
+
+/// Spell the CSRs implemented by this milestone as `objdump` does.
+fn csr_name(csr: u16) -> String {
+    match csr {
+        inst::CSR_MSTATUS => "mstatus".to_owned(),
+        inst::CSR_MTVEC => "mtvec".to_owned(),
+        inst::CSR_MSCRATCH => "mscratch".to_owned(),
+        inst::CSR_MEPC => "mepc".to_owned(),
+        inst::CSR_MCAUSE => "mcause".to_owned(),
+        inst::CSR_MTVAL => "mtval".to_owned(),
+        _ => format!("{csr:#x}"),
+    }
 }
 
 /// Renders a four-bit fence access set the way `objdump` does, in `i`, `o`, `r`,
@@ -361,6 +430,16 @@ impl Word {
     /// Second source register, bits 24:20.
     pub(crate) fn rs2(self) -> u8 {
         self.bits(20, 5) as u8
+    }
+
+    /// CSR address, bits 31:20.
+    pub(crate) fn csr(self) -> u16 {
+        self.bits(20, 12) as u16
+    }
+
+    /// Five-bit unsigned immediate for the immediate CSR operations.
+    pub(crate) fn zimm(self) -> u8 {
+        self.rs1()
     }
 
     /// I-type immediate: `imm[11:0]`, bits 31:20.
