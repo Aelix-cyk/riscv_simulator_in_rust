@@ -1371,7 +1371,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64im_and_rejects_writes_precisely() {
+    fn misa_reports_rv64im_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -1383,22 +1383,21 @@ mod tests {
         assert_ne!(misa & (1 << 8), 0, "I extension");
         assert_ne!(misa & (1 << 12), 0, "M extension");
 
-        let instruction = Instruction::Csrrw {
+        machine.cpu_mut().write_gpr(5, 7);
+        machine.cpu_mut().write_gpr(6, 0);
+        machine.execute(Instruction::Csrrw {
             rd: 5,
             csr: inst::CSR_MISA,
             rs1: 6,
-        };
-        machine.cpu_mut().write_gpr(5, 7);
-        machine.cpu_mut().write_gpr(6, 0);
-        machine.execute(instruction);
+        });
 
-        assert_eq!(machine.cpu().read_gpr(5), 7, "rd must not change");
-        assert_trap(
-            &machine,
-            inst::CAUSE_ILLEGAL_INSTRUCTION,
-            u64::from(instruction_word(instruction)),
-            4,
+        assert_eq!(
+            machine.cpu().read_gpr(5),
+            misa,
+            "csrrw returns the old value"
         );
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MISA), Some(misa));
+        assert_eq!(machine.cpu().pc(), 8);
     }
 
     #[test]

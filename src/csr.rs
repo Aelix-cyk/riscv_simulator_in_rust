@@ -45,6 +45,9 @@ impl Csrs {
     pub(crate) fn write(&mut self, address: u16, value: u64) -> bool {
         match address {
             inst::CSR_MSTATUS => self.mstatus = value & MSTATUS_WRITABLE,
+            // MXL and the implemented extension bits are fixed, so WARL writes
+            // are accepted and ignored.
+            inst::CSR_MISA => {}
             inst::CSR_MTVEC => self.mtvec = value & INSTRUCTION_ALIGNMENT_MASK,
             inst::CSR_MSCRATCH => self.mscratch = value,
             inst::CSR_MEPC => self.mepc = value & INSTRUCTION_ALIGNMENT_MASK,
@@ -125,11 +128,12 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64im_and_is_read_only() {
+    fn misa_is_a_fixed_rv64im_warl() {
         let mut csrs = Csrs::default();
 
         assert_eq!(csrs.read(inst::CSR_MISA), Some(MISA_VALUE));
-        assert!(!csrs.write(inst::CSR_MISA, u64::MAX));
+        assert!(csrs.write(inst::CSR_MISA, u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MISA), Some(MISA_VALUE));
     }
 
     #[test]

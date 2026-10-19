@@ -8,7 +8,7 @@ A 64-bit hart that executes RV64IM plus Zicsr — the integer ALU operations, al
 integer multiply/divide instructions, branches, jumps, loads and stores,
 `fence`/`fence.i`, and the six CSR read/modify/write forms. Synchronous exceptions,
 including `ecall` and `ebreak`, enter a machine-mode handler through `mtvec`.
-Implemented CSRs include read-only `misa` (RV64IM), `mstatus`, `mtvec`, `mscratch`,
+Implemented CSRs include WARL `misa` (RV64IM), `mstatus`, `mtvec`, `mscratch`,
 `mepc`, `mcause`, and `mtval`. The target profile is RVA22S64, built up
 progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
 requirements and the choices the specification leaves open, and `docs/notes/` for
