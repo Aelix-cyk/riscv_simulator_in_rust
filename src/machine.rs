@@ -369,14 +369,14 @@ impl<B: Bus> Machine<B> {
             Instruction::Csrrw { rd, csr, rs1 } => {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
-                debug_assert!(self.cpu.write_csr(csr, source));
+                self.cpu.write_csr(csr, source);
                 self.write(rd, old);
             }
             Instruction::Csrrs { rd, csr, rs1 } => {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
                 if source != 0 {
-                    debug_assert!(self.cpu.write_csr(csr, old | source));
+                    self.cpu.write_csr(csr, old | source);
                 }
                 self.write(rd, old);
             }
@@ -384,26 +384,26 @@ impl<B: Bus> Machine<B> {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
                 if source != 0 {
-                    debug_assert!(self.cpu.write_csr(csr, old & !source));
+                    self.cpu.write_csr(csr, old & !source);
                 }
                 self.write(rd, old);
             }
             Instruction::Csrrwi { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
-                debug_assert!(self.cpu.write_csr(csr, u64::from(zimm)));
+                self.cpu.write_csr(csr, u64::from(zimm));
                 self.write(rd, old);
             }
             Instruction::Csrrsi { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
                 if zimm != 0 {
-                    debug_assert!(self.cpu.write_csr(csr, old | u64::from(zimm)));
+                    self.cpu.write_csr(csr, old | u64::from(zimm));
                 }
                 self.write(rd, old);
             }
             Instruction::Csrrci { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
                 if zimm != 0 {
-                    debug_assert!(self.cpu.write_csr(csr, old & !u64::from(zimm)));
+                    self.cpu.write_csr(csr, old & !u64::from(zimm));
                 }
                 self.write(rd, old);
             }
@@ -415,10 +415,9 @@ impl<B: Bus> Machine<B> {
             }
             Instruction::Mret => {
                 // Check the return target before changing any machine state.
-                let target = Self::checked_target(self.cpu.csrs().exception_pc())?;
+                Self::checked_target(self.cpu.csrs().exception_pc())?;
                 let restored_pc = self.cpu.csrs_mut().return_from_m_trap();
-                debug_assert_eq!(target, restored_pc);
-                self.cpu.set_pc(target);
+                self.cpu.set_pc(restored_pc);
                 return Ok(());
             }
             Instruction::Beq { rs1, rs2, offset } => {
