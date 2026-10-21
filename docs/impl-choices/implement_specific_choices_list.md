@@ -74,7 +74,7 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 | Program container | Flat binary, loaded at `DRAM_BASE` | Decided |
 | Program start | Entry is the load address; the CLI sets the PC there | Decided |
 | Halt and exit signalling | Halt self-loop, `jal x0, 0`; `ecall` enters the machine trap handler | Decided (temporary) |
-| Host I/O | None yet; no `tohost`/`fromhost` symbols | Open |
+| Host I/O | Production host I/O remains absent. Compliance harnesses detect test-only `tohost` PASS/FAIL stores | Decided for tests |
 
 ## 7. Optional extensions
 

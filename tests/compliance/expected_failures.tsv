@@ -1,0 +1,16 @@
+# test	category	reason
+riscv-tests/rv64ua-p-amocas_d	unsupported	Zacas compare-and-swap is not implemented
+riscv-tests/rv64ua-p-amocas_q	unsupported	Zacas compare-and-swap is not implemented
+riscv-tests/rv64ua-p-amocas_w	unsupported	Zacas compare-and-swap is not implemented
+riscv-tests/rv64mi-p-breakpoint	known-bug	Breakpoint trap behavior does not yet match the compliance test
+riscv-tests/rv64mi-p-csr	unsupported	The required machine CSR bank is not implemented
+riscv-tests/rv64mi-p-illegal	known-bug	Illegal-instruction trap behavior does not yet match the compliance test
+riscv-tests/rv64mi-p-instret_overflow	unsupported	Zicntr counters are not implemented
+riscv-tests/rv64mi-p-mcsr	unsupported	The required machine CSR bank is not implemented
+riscv-tests/rv64mi-p-zicntr	unsupported	Zicntr counters are not implemented
+act4/rv64i/Zicsr/Zicsr-csrrc-00.elf	known-bug	ACT Zicsr CSRRC behavior currently fails
+act4/rv64i/Zicsr/Zicsr-csrrci-00.elf	known-bug	ACT Zicsr CSRRCI behavior currently fails
+act4/rv64i/Zicsr/Zicsr-csrrs-00.elf	known-bug	ACT Zicsr CSRRS behavior currently fails
+act4/rv64i/Zicsr/Zicsr-csrrsi-00.elf	known-bug	ACT Zicsr CSRRSI behavior currently fails
+act4/rv64i/Zicsr/Zicsr-csrrw-00.elf	known-bug	ACT Zicsr CSRRW behavior currently fails
+act4/rv64i/Zicsr/Zicsr-csrrwi-00.elf	known-bug	ACT Zicsr CSRRWI behavior currently fails

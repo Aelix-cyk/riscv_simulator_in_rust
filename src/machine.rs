@@ -2088,7 +2088,7 @@ mod tests {
     fn unsupported_csr_traps_before_writing_rd_or_csr_state() {
         let instruction = Instruction::Csrrs {
             rd: 5,
-            csr: inst::CSR_MIE,
+            csr: inst::CSR_MIP,
             rs1: 0,
         };
         let mut machine = trapped_machine();

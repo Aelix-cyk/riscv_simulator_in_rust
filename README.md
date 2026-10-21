@@ -55,6 +55,21 @@ run time with the local toolchain and queries `spike` for the expected architect
 state — all 32 registers and the loaded memory — so no binaries are committed. The
 decoder and trace text are additionally checked line by line against `objdump`.
 
+External compliance gates are explicit because they require separate checkouts
+and generate many programs:
+
+```sh
+export RISCV_TESTS_DIR="$HOME/tools/riscv-tests"
+export RISCV_ARCH_TEST_DIR="$HOME/tools/riscv-arch-test"
+cargo test --test compliance -- --ignored --nocapture
+```
+
+The ACT4 gate requires `mise`, `uv`, UDB, and `spike` on `PATH`. It generates
+project-local ACT4 ELFs under `target/compliance/act4` by default. Known
+unsupported features and deferred bugs live in
+`tests/compliance/expected_failures.tsv`; listed passes or unlisted failures
+fail the gate.
+
 ## Development tooling
 
 - CLI agent: `codex`

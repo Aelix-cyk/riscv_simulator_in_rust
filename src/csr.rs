@@ -28,6 +28,12 @@ pub(crate) struct Csrs {
     mepc: u64,
     mcause: u64,
     mtval: u64,
+    mie: u64,
+    medeleg: u64,
+    mideleg: u64,
+    pmpcfg0: u64,
+    pmpaddr0: u64,
+    mnstatus: u64,
 }
 
 impl Csrs {
@@ -36,11 +42,19 @@ impl Csrs {
         match address {
             inst::CSR_MSTATUS => Some(self.mstatus),
             inst::CSR_MISA => Some(MISA_VALUE),
+            inst::CSR_MHARTID => Some(0),
             inst::CSR_MTVEC => Some(self.mtvec),
             inst::CSR_MSCRATCH => Some(self.mscratch),
             inst::CSR_MEPC => Some(self.mepc),
             inst::CSR_MCAUSE => Some(self.mcause),
             inst::CSR_MTVAL => Some(self.mtval),
+            inst::CSR_MIE => Some(self.mie),
+            inst::CSR_MEDELEG => Some(self.medeleg),
+            inst::CSR_MIDELEG => Some(self.mideleg),
+            inst::CSR_PMPCFG0 => Some(self.pmpcfg0),
+            inst::CSR_PMPADDR0 => Some(self.pmpaddr0),
+            inst::CSR_MNSTATUS => Some(self.mnstatus),
+            inst::CSR_SATP => Some(0),
             _ => None,
         }
     }
@@ -57,6 +71,14 @@ impl Csrs {
             inst::CSR_MEPC => self.mepc = value & INSTRUCTION_ALIGNMENT_MASK,
             inst::CSR_MCAUSE => self.mcause = value,
             inst::CSR_MTVAL => self.mtval = value,
+            inst::CSR_MIE => self.mie = value,
+            inst::CSR_MEDELEG => self.medeleg = value,
+            inst::CSR_MIDELEG => self.mideleg = value,
+            inst::CSR_PMPCFG0 => self.pmpcfg0 = value,
+            inst::CSR_PMPADDR0 => self.pmpaddr0 = value,
+            inst::CSR_MNSTATUS => self.mnstatus = value,
+            // Only Bare translation is implemented.
+            inst::CSR_SATP => {}
             _ => return false,
         }
         true
@@ -114,6 +136,13 @@ mod tests {
         assert!(csrs.write(inst::CSR_MEPC, u64::MAX));
         assert!(csrs.write(inst::CSR_MCAUSE, u64::MAX));
         assert!(csrs.write(inst::CSR_MTVAL, u64::MAX));
+        assert!(csrs.write(inst::CSR_MIE, u64::MAX));
+        assert!(csrs.write(inst::CSR_MEDELEG, u64::MAX));
+        assert!(csrs.write(inst::CSR_MIDELEG, u64::MAX));
+        assert!(csrs.write(inst::CSR_PMPCFG0, u64::MAX));
+        assert!(csrs.write(inst::CSR_PMPADDR0, u64::MAX));
+        assert!(csrs.write(inst::CSR_MNSTATUS, u64::MAX));
+        assert!(csrs.write(inst::CSR_SATP, u64::MAX));
 
         assert_eq!(csrs.read(inst::CSR_MSTATUS), Some(MSTATUS_WRITABLE));
         assert_eq!(csrs.read(inst::CSR_MTVEC), Some(INSTRUCTION_ALIGNMENT_MASK));
@@ -121,14 +150,21 @@ mod tests {
         assert_eq!(csrs.read(inst::CSR_MSCRATCH), Some(u64::MAX));
         assert_eq!(csrs.read(inst::CSR_MCAUSE), Some(u64::MAX));
         assert_eq!(csrs.read(inst::CSR_MTVAL), Some(u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MIE), Some(u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MEDELEG), Some(u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MIDELEG), Some(u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_PMPCFG0), Some(u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_PMPADDR0), Some(u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MNSTATUS), Some(u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_SATP), Some(0));
     }
 
     #[test]
     fn unsupported_csrs_are_rejected() {
         let mut csrs = Csrs::default();
 
-        assert_eq!(csrs.read(inst::CSR_MIE), None);
-        assert!(!csrs.write(inst::CSR_MIE, 1));
+        assert_eq!(csrs.read(inst::CSR_MIP), None);
+        assert!(!csrs.write(inst::CSR_MIP, 1));
     }
 
     #[test]
