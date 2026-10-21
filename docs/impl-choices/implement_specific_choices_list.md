@@ -15,9 +15,9 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Hart count and topology | One hart, hart ID 0 | Decided |
 | Reset PC, the platform's boot address | `DRAM_BASE` (`0x8000_0000`); images link and load there | Decided |
 | Reset value of GPRs and CSRs | All zero | Decided |
-| IALIGN | 32; C is mandatory in the profile, so 16-bit alignment never appears | Decided |
-| Behaviour on a misaligned instruction address | Raise an exception, currently `Trap::InstructionAddressMisaligned` | Decided |
-| `misa` | WARL RV64IMA: `MXL = 2`, with A, I, and M fixed; writes are accepted and ignored | Decided |
+| IALIGN | 16; Zca provides compressed instructions, so branch and jump targets need only be two-byte aligned | Decided |
+| Behaviour on a misaligned instruction address | Raise an instruction-address-misaligned exception when the PC or control-transfer target is not two-byte aligned | Decided |
+| `misa` | WARL RV64IMAC: `MXL = 2`, with A, C, I, and M fixed; writes are accepted and ignored | Decided |
 | `mvendorid`, `marchid`, `mimpid` | Not implemented | Open |
 | Physical address width | Registers are 64-bit; the implemented physical space is the single DRAM region below | Decided |
 

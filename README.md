@@ -4,14 +4,15 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 
 ## Status
 
-A 64-bit hart that executes RV64IMA plus Zicsr — the integer ALU operations, all
-integer multiply/divide and atomic instructions, branches, jumps, loads and stores,
-`fence`/`fence.i`, and the six CSR read/modify/write forms. Synchronous exceptions,
-including `ecall` and `ebreak`, enter a machine-mode handler through `mtvec`.
-Implemented CSRs include WARL `misa` (RV64IMA), `mstatus`, `mtvec`, `mscratch`,
-`mepc`, `mcause`, and `mtval`. The target profile is RVA22S64, built up
-progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
-requirements and the choices the specification leaves open.
+A 64-bit hart that executes RV64IMAC plus Zicsr — the integer ALU operations, all
+integer multiply/divide and atomic instructions, Zca compressed instructions,
+branches, jumps, loads and stores, `fence`/`fence.i`, and the six CSR
+read/modify/write forms. Synchronous exceptions, including `ecall` and `ebreak`,
+enter a machine-mode handler through `mtvec`. Implemented CSRs include WARL `misa`
+(RV64IMAC), `mstatus`, `mtvec`, `mscratch`, `mepc`, `mcause`, and `mtval`. The
+target profile is RVA22S64, built up progressively: see `GLOSSARY.md` for
+terminology, `docs/impl-choices/` for the requirements and the choices the
+specification leaves open.
 
 ## Usage
 
@@ -34,7 +35,7 @@ its loadable bytes. Fixtures use `tests/fixtures/link.ld`, which places the imag
 `DRAM_BASE` with no leading gap:
 
 ```sh
-$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64ima_zifencei_zicsr -mabi=lp64 -nostdlib \
+$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64imac_zifencei_zicsr -mabi=lp64 -nostdlib \
     -I tests/fixtures -Wl,-T,tests/fixtures/link.ld \
     -o /tmp/loop.elf tests/fixtures/loop.S
 $RISCV/bin/riscv64-unknown-elf-objcopy -O binary /tmp/loop.elf /tmp/loop.bin
@@ -61,6 +62,7 @@ and generate many programs:
 ```sh
 export RISCV_TESTS_DIR="$HOME/tools/riscv-tests"
 export RISCV_ARCH_TEST_DIR="$HOME/tools/riscv-arch-test"
+export ACT4_EXTENSIONS=Zca    # optional target filter
 cargo test --test compliance -- --ignored --nocapture
 ```
 
