@@ -1173,7 +1173,7 @@ impl CompressedInstruction {
             Self::Addiw { rd, imm, .. } => format!("c.addiw {},{imm}", abi_name(rd)),
             Self::Li { rd, imm, .. } => format!("c.li {},{imm}", abi_name(rd)),
             Self::Lui { rd, imm, .. } => {
-                format!("c.lui {},{:#x}", abi_name(rd), imm >> U_IMMEDIATE_SHIFT)
+                format!("c.lui {},{:#x}", abi_name(rd), u_field(imm))
             }
             Self::Addi16sp { imm, .. } => {
                 format!("c.addi16sp {},{imm}", abi_name(SP))
@@ -1982,6 +1982,7 @@ mod tests {
     const C_J_PC_PLUS_4: u32 = 0xa011;
     const C_JALR_S8: u32 = 0x9c02;
     const C_JR_RA: u32 = 0x8082;
+    const C_LUI_RA_MINUS_32: u32 = 0x7081;
     const C_ADDI_ZERO_1_HINT: u32 = 0x0005;
     const C_MV_ZERO_RA_HINT: u32 = 0x8006;
     const C_ADD_ZERO_RA_HINT: u32 = 0x9006;
@@ -2009,6 +2010,7 @@ mod tests {
         assert_eq!(render(C_J_PC_PLUS_4).unwrap(), "c.j pc + 0x4");
         assert_eq!(render(C_JALR_S8).unwrap(), "c.jalr s8");
         assert_eq!(render(C_JR_RA).unwrap(), "c.jr ra");
+        assert_eq!(render(C_LUI_RA_MINUS_32).unwrap(), "c.lui ra,0xfffe0");
     }
 
     #[test]

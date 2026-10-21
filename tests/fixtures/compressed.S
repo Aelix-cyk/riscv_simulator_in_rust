@@ -30,6 +30,8 @@ _start:
 	c.srli	x15, 1
 	c.srai	x15, 1
 	c.lui	x18, 1
+	c.lui	x18, 0xfffe0
+	c.lui	x18, 31
 	c.add	x16, x17
 	c.mv	x8, x17
 	c.mv	x9, x16
