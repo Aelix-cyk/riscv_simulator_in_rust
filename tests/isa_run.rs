@@ -13,16 +13,26 @@ const FIXTURES: [&str; 10] = [
     "amo.S",
 ];
 
+/// Zca fixtures, assembled with compressed instructions enabled.
+const COMPRESSED_FIXTURES: [&str; 2] = ["compressed.S", "compressed_boundaries.S"];
+
 #[test]
 fn fixtures_match_spike() {
     for fixture in FIXTURES {
-        check_fixture(fixture);
+        check_fixture(fixture, false);
+    }
+    for fixture in COMPRESSED_FIXTURES {
+        check_fixture(fixture, true);
     }
 }
 
 /// Runs one fixture and compares registers and memory against spike.
-fn check_fixture(name: &str) {
-    let program = assemble::assemble(name);
+fn check_fixture(name: &str, compressed: bool) {
+    let program = if compressed {
+        assemble::assemble_compressed(name)
+    } else {
+        assemble::assemble(name)
+    };
     let mut machine = Machine::new(Memory::with_size(program.memory_len()));
     machine.cpu_mut().set_pc(assemble::LOAD_ADDRESS);
     machine

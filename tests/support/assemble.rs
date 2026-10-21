@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use riscv_simulator_in_rust::bus::Bus;
 use riscv_simulator_in_rust::cpu::{ABI_NAMES, GPR_COUNT};
+use riscv_simulator_in_rust::decode::is_compressed;
 
 /// Address fixtures are linked at and loaded into memory.
 pub const LOAD_ADDRESS: u64 = 0x8000_0000;
@@ -39,6 +41,16 @@ pub struct Disassembled {
 }
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Reads a 16- or 32-bit instruction word, zero-extending compressed words.
+pub fn instruction_word(bus: &mut dyn Bus, address: u64) -> u32 {
+    let low = bus.read_u16(address).expect("read instruction low half");
+    if is_compressed(u32::from(low)) {
+        u32::from(low)
+    } else {
+        bus.read_u32(address).expect("read 32-bit instruction")
+    }
+}
 
 impl Program {
     /// Address of the halt self-loop, `jal x0, 0`.
@@ -105,6 +117,16 @@ impl Drop for Program {
 
 /// Assembles `tests/fixtures/<name>` and returns its binary and disassembly.
 pub fn assemble(name: &str) -> Program {
+    assemble_with_march(name, "rv64ima_zifencei_zicsr")
+}
+
+/// Assembles a fixture with Zca enabled.
+pub fn assemble_compressed(name: &str) -> Program {
+    assemble_with_march(name, "rv64imac_zifencei_zicsr")
+}
+
+/// Assembles a fixture for a selected ISA string.
+fn assemble_with_march(name: &str, march: &str) -> Program {
     let work_dir = std::env::temp_dir().join(format!(
         "arvsr-{}-{}",
         std::process::id(),
@@ -121,7 +143,7 @@ pub fn assemble(name: &str) -> Program {
     let binary = work_dir.join("fixture.bin");
 
     run(Command::new(tool("riscv64-unknown-elf-gcc"))
-        .arg("-march=rv64ima_zifencei_zicsr")
+        .arg(format!("-march={march}"))
         .arg("-mabi=lp64")
         .arg("-nostdlib")
         .arg(format!("-I{}", fixtures.display()))

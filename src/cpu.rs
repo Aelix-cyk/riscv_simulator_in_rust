@@ -8,6 +8,12 @@ pub const GPR_COUNT: usize = 32;
 /// Index of the hardwired zero register, `x0`.
 pub const X0: usize = 0;
 
+/// Index of the return-address register, `x1`.
+pub const RA: u8 = 1;
+
+/// Index of the stack-pointer register, `x2`.
+pub const SP: u8 = 2;
+
 /// ABI names of the general-purpose registers, indexed by register number.
 pub const ABI_NAMES: [&str; GPR_COUNT] = [
     "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4",

@@ -14,36 +14,35 @@ const FIXTURES: [&str; 13] = [
     "trap.S", "mul.S", "div.S", "lrsc.S", "amo.S",
 ];
 
+/// Zca fixtures assembled with compressed instructions enabled.
+const COMPRESSED_FIXTURES: [&str; 2] = ["compressed.S", "compressed_boundaries.S"];
+
 /// Legal mnemonics that this milestone does not decode yet.
 const UNIMPLEMENTED: [&str; 0] = [];
 
 #[test]
 fn decoder_mnemonics_match_objdump() {
     for fixture in FIXTURES {
-        check_fixture(fixture);
+        check_fixture(fixture, false);
+    }
+    for fixture in COMPRESSED_FIXTURES {
+        check_fixture(fixture, true);
     }
 }
 
 /// Decodes every instruction of a fixture and compares mnemonics with `objdump`.
-fn check_fixture(name: &str) {
-    let program = assemble::assemble(name);
-    // The image holds .text plus any .data; it must at least cover the
-    // instruction stream the disassembly lists.
-    assert!(
-        program.binary.len() >= program.instructions.len() * 4,
-        "{name}: the image is smaller than its instruction stream"
-    );
-
+fn check_fixture(name: &str, compressed: bool) {
+    let program = if compressed {
+        assemble::assemble_compressed(name)
+    } else {
+        assemble::assemble(name)
+    };
     let mut memory = Memory::with_size(program.binary.len());
     memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
 
-    for (index, line) in program.instructions.iter().enumerate() {
-        let address = DRAM_BASE + index as u64 * 4;
-        assert_eq!(
-            address, line.address,
-            "{name}: instructions are not contiguous"
-        );
-        let word = memory.read_u32(address).unwrap();
+    for line in &program.instructions {
+        let address = line.address;
+        let word = assemble::instruction_word(&mut memory, address);
         let decoded = decode(word);
 
         if line.mnemonic == ".word" || UNIMPLEMENTED.contains(&line.mnemonic.as_str()) {
@@ -60,8 +59,38 @@ fn check_fixture(name: &str) {
             decoded.unwrap_or_else(|trap| panic!("{name}: {address:#x} {word:#010x}: {trap:?}"));
         assert_eq!(
             instruction.mnemonic(),
-            line.mnemonic,
+            canonical_mnemonic(&line.mnemonic),
             "{name} at {address:#x}"
         );
+    }
+}
+
+/// Maps a compressed mnemonic to the base instruction it expands into.
+fn canonical_mnemonic(mnemonic: &str) -> &str {
+    match mnemonic {
+        "c.addi" | "c.addi4spn" | "c.addi16sp" | "c.li" | "c.nop" => "addi",
+        "c.lui" => "lui",
+        "c.addiw" => "addiw",
+        "c.andi" => "andi",
+        "c.slli" => "slli",
+        "c.srli" => "srli",
+        "c.srai" => "srai",
+        "c.sub" => "sub",
+        "c.xor" => "xor",
+        "c.or" => "or",
+        "c.and" => "and",
+        "c.subw" => "subw",
+        "c.addw" => "addw",
+        "c.lw" | "c.lwsp" => "lw",
+        "c.ld" | "c.ldsp" => "ld",
+        "c.sw" | "c.swsp" => "sw",
+        "c.sd" | "c.sdsp" => "sd",
+        "c.mv" | "c.add" => "add",
+        "c.j" => "jal",
+        "c.jr" | "c.jalr" => "jalr",
+        "c.beqz" => "beq",
+        "c.bnez" => "bne",
+        "c.ebreak" => "ebreak",
+        other => other.strip_prefix("c.").unwrap_or(other),
     }
 }

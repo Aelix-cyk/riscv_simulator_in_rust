@@ -2,10 +2,227 @@
 
 use std::borrow::Cow;
 
-use crate::cpu::abi_name;
+use crate::cpu::{RA, SP, abi_name};
 use crate::inst;
 use crate::opcodes;
 use crate::trap::Trap;
+
+const COMPRESSED_INSTRUCTION_BYTES: u64 = 2;
+const STANDARD_INSTRUCTION_BYTES: u64 = 4;
+const XLEN: u32 = 64;
+const REGISTER_BITS: u32 = 5;
+const PRIME_REGISTER_BITS: u32 = 3;
+const SINGLE_BIT_WIDTH: u32 = 1;
+const PRIME_REGISTER_BASE: u8 = 8;
+const MINOR_OPCODE_BITS: u32 = 2;
+const MINOR_OPCODE_MASK: u16 = (1 << MINOR_OPCODE_BITS) - 1;
+const STANDARD_MINOR_OPCODE: u16 = 0b11;
+const ZERO_REGISTER: u8 = 0;
+const ZERO_IMMEDIATE: i64 = 0;
+const ZERO_OFFSET: i64 = 0;
+
+const COMPRESSED_RD_SHIFT: u32 = 7;
+const COMPRESSED_RS2_SHIFT: u32 = 2;
+const PRIME_RD_SHIFT: u32 = 2;
+const PRIME_RS1_SHIFT: u32 = 7;
+const COMPRESSED_FUNCT3_SHIFT: u32 = 13;
+const COMPRESSED_FUNCT3_BITS: u32 = 3;
+const COMPRESSED_ALU_FUNCT2_SHIFT: u32 = 10;
+const COMPRESSED_ALU_FUNCT2_BITS: u32 = 2;
+const COMPRESSED_ALU_RS2_SHIFT: u32 = 5;
+const COMPRESSED_ALU_RS2_BITS: u32 = 2;
+const COMPRESSED_ALU_WIDTH_FLAG_SHIFT: u32 = 12;
+const COMPRESSED_ALU_WIDTH_FLAG_BITS: u32 = 1;
+const COMPRESSED_MISC_WIDTH_FLAG_SHIFT: u32 = 12;
+const COMPRESSED_MISC_WIDTH_FLAG_BITS: u32 = 1;
+
+const C0_ADDI4SPN: u8 = 0b000;
+const C0_LW: u8 = 0b010;
+const C0_LD: u8 = 0b011;
+const C0_SW: u8 = 0b110;
+const C0_SD: u8 = 0b111;
+const C1_ADDI: u8 = 0b000;
+const C1_ADDIW: u8 = 0b001;
+const C1_LI: u8 = 0b010;
+const C1_LUI_OR_ADDI16SP: u8 = 0b011;
+const C1_ALU: u8 = 0b100;
+const C1_J: u8 = 0b101;
+const C1_BEQZ: u8 = 0b110;
+const C1_BNEZ: u8 = 0b111;
+const C2_SLLI: u8 = 0b000;
+const C2_LWSP: u8 = 0b010;
+const C2_LDSP: u8 = 0b011;
+const C2_MISC: u8 = 0b100;
+const C2_SWSP: u8 = 0b110;
+const C2_SDSP: u8 = 0b111;
+
+const C_ALU_SRLI: u16 = 0b00;
+const C_ALU_SRAI: u16 = 0b01;
+const C_ALU_ANDI: u16 = 0b10;
+const C_ALU_REGISTER: u16 = 0b11;
+const C_ALU_REGISTER_BASE: u16 = 0;
+const C_ALU_REGISTER_WORD: u16 = 1;
+const C_ALU_SUB: u16 = 0b00;
+const C_ALU_XOR: u16 = 0b01;
+const C_ALU_OR: u16 = 0b10;
+const C_ALU_AND: u16 = 0b11;
+const C_ALU_SUBW: u16 = 0b00;
+const C_ALU_ADDW: u16 = 0b01;
+
+const C_MISC_JR_OR_MV: u16 = 0;
+const C_MISC_EBREAK_OR_JALR: u16 = 1;
+const C_MISC_EMPTY_REGISTER: u8 = 0;
+
+const IMMEDIATE_LSB_SHIFT: u32 = 0;
+const U_IMMEDIATE_SHIFT: u32 = 12;
+const CI_IMMEDIATE_BITS: u32 = 6;
+const ADDI16SP_IMMEDIATE_BITS: u32 = 10;
+const JUMP_IMMEDIATE_BITS: u32 = 12;
+const BRANCH_IMMEDIATE_BITS: u32 = 9;
+
+const STANDARD_RD_SHIFT: u32 = 7;
+const STANDARD_RS1_SHIFT: u32 = 15;
+const STANDARD_RS2_SHIFT: u32 = 20;
+const STANDARD_AQ_SHIFT: u32 = 26;
+const STANDARD_RL_SHIFT: u32 = 25;
+const STANDARD_CSR_SHIFT: u32 = 20;
+const STANDARD_CSR_BITS: u32 = 12;
+const STANDARD_FENCE_PRED_SHIFT: u32 = 24;
+const STANDARD_FENCE_SUCC_SHIFT: u32 = 20;
+const STANDARD_FENCE_BITS: u32 = 4;
+const STANDARD_SHIFT_AMOUNT_SHIFT: u32 = 20;
+const STANDARD_SHIFT_AMOUNT_BITS: u32 = 6;
+const WORD_SHIFT_AMOUNT_BITS: u32 = 5;
+const U_IMMEDIATE_BITS: u32 = 20;
+const I_IMMEDIATE_BITS: u32 = 12;
+const S_IMMEDIATE_BITS: u32 = 12;
+const B_IMMEDIATE_BITS: u32 = 13;
+const J_IMMEDIATE_BITS: u32 = 21;
+const U_IMMEDIATE_FIELD_BITS: u32 = 20;
+const U_FIELD_MASK: u32 = (1 << U_IMMEDIATE_FIELD_BITS) - 1;
+
+/// Moves a contiguous field from an instruction word into an immediate.
+#[derive(Clone, Copy)]
+struct Field {
+    source_shift: u32,
+    width: u32,
+    target_shift: u32,
+}
+
+const fn field(source_shift: u32, width: u32, target_shift: u32) -> Field {
+    Field {
+        source_shift,
+        width,
+        target_shift,
+    }
+}
+
+const CI_IMMEDIATE_FIELDS: &[Field] = &[field(12, 1, 5), field(2, 5, 0)];
+const ADDI4SPN_IMMEDIATE_FIELDS: &[Field] = &[
+    field(7, 4, 6),
+    field(11, 2, 4),
+    field(5, 1, 3),
+    field(6, 1, 2),
+];
+const ADDI16SP_IMMEDIATE_FIELDS: &[Field] = &[
+    field(12, 1, 9),
+    field(3, 2, 7),
+    field(5, 1, 6),
+    field(2, 1, 5),
+    field(6, 1, 4),
+];
+const LW_IMMEDIATE_FIELDS: &[Field] = &[field(5, 1, 6), field(10, 3, 3), field(6, 1, 2)];
+const LD_IMMEDIATE_FIELDS: &[Field] = &[field(5, 2, 6), field(10, 3, 3)];
+const J_IMMEDIATE_FIELDS: &[Field] = &[
+    field(12, 1, 11),
+    field(8, 1, 10),
+    field(9, 2, 8),
+    field(6, 1, 7),
+    field(7, 1, 6),
+    field(2, 1, 5),
+    field(11, 1, 4),
+    field(3, 3, 1),
+];
+const B_IMMEDIATE_FIELDS: &[Field] = &[
+    field(12, 1, 8),
+    field(5, 2, 6),
+    field(2, 1, 5),
+    field(10, 2, 3),
+    field(3, 2, 1),
+];
+const LWSP_IMMEDIATE_FIELDS: &[Field] = &[field(2, 2, 6), field(12, 1, 5), field(4, 3, 2)];
+const LDSP_IMMEDIATE_FIELDS: &[Field] = &[field(2, 3, 6), field(12, 1, 5), field(5, 2, 3)];
+const SWSP_IMMEDIATE_FIELDS: &[Field] = &[field(7, 2, 6), field(9, 4, 2)];
+const SDSP_IMMEDIATE_FIELDS: &[Field] = &[field(7, 3, 6), field(10, 3, 3)];
+const U_IMMEDIATE_FIELDS: &[Field] = &[field(
+    U_IMMEDIATE_SHIFT,
+    U_IMMEDIATE_FIELD_BITS,
+    IMMEDIATE_LSB_SHIFT,
+)];
+const I_IMMEDIATE_FIELDS: &[Field] = &[field(
+    STANDARD_CSR_SHIFT,
+    I_IMMEDIATE_BITS,
+    IMMEDIATE_LSB_SHIFT,
+)];
+const S_IMMEDIATE_FIELDS: &[Field] = &[field(25, 7, 5), field(7, 5, 0)];
+const STANDARD_B_IMMEDIATE_FIELDS: &[Field] = &[
+    field(31, 1, 12),
+    field(7, 1, 11),
+    field(25, 6, 5),
+    field(8, 4, 1),
+];
+const STANDARD_J_IMMEDIATE_FIELDS: &[Field] = &[
+    field(31, 1, 20),
+    field(12, 8, 12),
+    field(20, 1, 11),
+    field(21, 10, 1),
+];
+
+const fn mask_u16(width: u32) -> u16 {
+    (1 << width) - 1
+}
+
+const fn mask_u32(width: u32) -> u32 {
+    (1 << width) - 1
+}
+
+fn encode_immediate(base: u32, value: i64, fields: &[Field]) -> u32 {
+    let value = value as u32;
+    fields.iter().fold(base, |word, field| {
+        let field_value = (value >> field.target_shift) & mask_u32(field.width);
+        word | (field_value << field.source_shift)
+    })
+}
+
+fn encode_i(base: u32, rd: u8, rs1: u8, immediate: i64) -> u32 {
+    encode_immediate(base, immediate, I_IMMEDIATE_FIELDS)
+        | (u32::from(rd) << STANDARD_RD_SHIFT)
+        | (u32::from(rs1) << STANDARD_RS1_SHIFT)
+}
+
+fn encode_r(base: u32, rd: u8, rs1: u8, rs2: u8) -> u32 {
+    base | (u32::from(rd) << STANDARD_RD_SHIFT)
+        | (u32::from(rs1) << STANDARD_RS1_SHIFT)
+        | (u32::from(rs2) << STANDARD_RS2_SHIFT)
+}
+
+fn encode_u(base: u32, rd: u8, immediate: i64) -> u32 {
+    encode_immediate(base, immediate >> U_IMMEDIATE_SHIFT, U_IMMEDIATE_FIELDS)
+        | (u32::from(rd) << STANDARD_RD_SHIFT)
+}
+
+fn store_register_fields(rs1: u8, rs2: u8) -> u32 {
+    (u32::from(rs1) << STANDARD_RS1_SHIFT) | (u32::from(rs2) << STANDARD_RS2_SHIFT)
+}
+
+fn encode_nop() -> u32 {
+    encode_i(
+        inst::MATCH_ADDI,
+        ZERO_REGISTER,
+        ZERO_REGISTER,
+        ZERO_IMMEDIATE,
+    )
+}
 
 /// A decoded instruction: one variant per mnemonic, with named fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,6 +564,747 @@ pub enum Instruction {
     Bgeu { rs1: u8, rs2: u8, offset: i64 },
     /// `jal rd, offset` — offset is relative to the instruction address.
     Jal { rd: u8, offset: i64 },
+}
+
+/// A decoded instruction plus the encoding that produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DecodedInstruction {
+    instruction: Instruction,
+    encoding: Encoding,
+}
+
+/// Original instruction length and bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Encoding {
+    Compressed(CompressedInstruction),
+    Standard(u32),
+}
+
+impl DecodedInstruction {
+    /// Wraps an already-decoded standard instruction.
+    pub(crate) fn standard(instruction: Instruction, word: u32) -> Self {
+        Self {
+            instruction,
+            encoding: Encoding::Standard(word),
+        }
+    }
+
+    /// The base instruction whose execution semantics this encoding uses.
+    pub(crate) fn instruction(self) -> Instruction {
+        self.instruction
+    }
+
+    /// Instruction length in bytes.
+    pub(crate) fn length(self) -> u64 {
+        match self.encoding {
+            Encoding::Compressed(_) => COMPRESSED_INSTRUCTION_BYTES,
+            Encoding::Standard(_) => STANDARD_INSTRUCTION_BYTES,
+        }
+    }
+
+    /// Original encoding, zero-extended for a compressed instruction.
+    pub(crate) fn raw(self) -> u32 {
+        match self.encoding {
+            Encoding::Compressed(instruction) => u32::from(instruction.word()),
+            Encoding::Standard(word) => word,
+        }
+    }
+
+    /// Whether this is a standard 32-bit `jal x0, 0`, the CLI halt convention.
+    pub(crate) fn is_standard_jal_self_loop(self) -> bool {
+        matches!(self.encoding, Encoding::Standard(_))
+            && self.instruction
+                == (Instruction::Jal {
+                    rd: ZERO_REGISTER,
+                    offset: ZERO_OFFSET,
+                })
+    }
+
+    /// Renders the original compressed mnemonic and operands for a trace.
+    pub(crate) fn render(self) -> String {
+        match self.encoding {
+            Encoding::Compressed(instruction) => instruction.render(),
+            Encoding::Standard(_) => self.instruction.render(),
+        }
+    }
+}
+
+/// The integer compressed instructions in Zca, with their decoded operands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompressedInstruction {
+    Addi4spn {
+        rd: u8,
+        imm: i64,
+        word: u16,
+    },
+    Lw {
+        rd: u8,
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
+    Ld {
+        rd: u8,
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
+    Sw {
+        rs2: u8,
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
+    Sd {
+        rs2: u8,
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
+    Addi {
+        rd: u8,
+        imm: i64,
+        word: u16,
+    },
+    Nop {
+        imm: i64,
+        word: u16,
+    },
+    Addiw {
+        rd: u8,
+        imm: i64,
+        word: u16,
+    },
+    Li {
+        rd: u8,
+        imm: i64,
+        word: u16,
+    },
+    Lui {
+        rd: u8,
+        imm: i64,
+        word: u16,
+    },
+    Addi16sp {
+        imm: i64,
+        word: u16,
+    },
+    Srli {
+        rd: u8,
+        shamt: u8,
+        word: u16,
+    },
+    Srai {
+        rd: u8,
+        shamt: u8,
+        word: u16,
+    },
+    Andi {
+        rd: u8,
+        imm: i64,
+        word: u16,
+    },
+    Sub {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    Xor {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    Or {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    And {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    Subw {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    Addw {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    J {
+        offset: i64,
+        word: u16,
+    },
+    Beqz {
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
+    Bnez {
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
+    Slli {
+        rd: u8,
+        shamt: u8,
+        word: u16,
+    },
+    Lwsp {
+        rd: u8,
+        offset: i64,
+        word: u16,
+    },
+    Ldsp {
+        rd: u8,
+        offset: i64,
+        word: u16,
+    },
+    Jr {
+        rs1: u8,
+        word: u16,
+    },
+    Mv {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    Ebreak {
+        word: u16,
+    },
+    Jalr {
+        rs1: u8,
+        word: u16,
+    },
+    Add {
+        rd: u8,
+        rs2: u8,
+        word: u16,
+    },
+    Swsp {
+        rs2: u8,
+        offset: i64,
+        word: u16,
+    },
+    Sdsp {
+        rs2: u8,
+        offset: i64,
+        word: u16,
+    },
+}
+
+impl CompressedInstruction {
+    fn word(self) -> u16 {
+        match self {
+            Self::Addi4spn { word, .. }
+            | Self::Lw { word, .. }
+            | Self::Ld { word, .. }
+            | Self::Sw { word, .. }
+            | Self::Sd { word, .. }
+            | Self::Addi { word, .. }
+            | Self::Nop { word, .. }
+            | Self::Addiw { word, .. }
+            | Self::Li { word, .. }
+            | Self::Lui { word, .. }
+            | Self::Addi16sp { word, .. }
+            | Self::Srli { word, .. }
+            | Self::Srai { word, .. }
+            | Self::Andi { word, .. }
+            | Self::Sub { word, .. }
+            | Self::Xor { word, .. }
+            | Self::Or { word, .. }
+            | Self::And { word, .. }
+            | Self::Subw { word, .. }
+            | Self::Addw { word, .. }
+            | Self::J { word, .. }
+            | Self::Beqz { word, .. }
+            | Self::Bnez { word, .. }
+            | Self::Slli { word, .. }
+            | Self::Lwsp { word, .. }
+            | Self::Ldsp { word, .. }
+            | Self::Jr { word, .. }
+            | Self::Mv { word, .. }
+            | Self::Ebreak { word }
+            | Self::Jalr { word, .. }
+            | Self::Add { word, .. }
+            | Self::Swsp { word, .. }
+            | Self::Sdsp { word, .. } => word,
+        }
+    }
+
+    fn decode(word: u16) -> Result<Self, Trap> {
+        let quadrant = word & MINOR_OPCODE_MASK;
+        let funct3 =
+            CompressedWord::new(word).bits(COMPRESSED_FUNCT3_SHIFT, COMPRESSED_FUNCT3_BITS) as u8;
+
+        match (quadrant, funct3) {
+            (0b00, C0_ADDI4SPN) => {
+                let imm = CompressedWord::new(word).addi4spn_immediate();
+                if imm == ZERO_IMMEDIATE {
+                    return Err(Trap::IllegalInstruction);
+                }
+                Ok(Self::Addi4spn {
+                    rd: CompressedWord::new(word).rd_prime(),
+                    imm,
+                    word,
+                })
+            }
+            (0b00, C0_LW) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Lw {
+                    rd: word_fields.rd_prime(),
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.lw_offset(),
+                    word,
+                })
+            }
+            (0b00, C0_LD) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Ld {
+                    rd: word_fields.rd_prime(),
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.ld_offset(),
+                    word,
+                })
+            }
+            (0b00, C0_SW) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Sw {
+                    rs2: word_fields.rd_prime(),
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.lw_offset(),
+                    word,
+                })
+            }
+            (0b00, C0_SD) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Sd {
+                    rs2: word_fields.rd_prime(),
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.ld_offset(),
+                    word,
+                })
+            }
+            (0b01, C1_ADDI) => {
+                let word_fields = CompressedWord::new(word);
+                let rd = word_fields.rd();
+                let imm = word_fields.ci_immediate();
+                if rd == ZERO_REGISTER {
+                    Ok(Self::Nop { imm, word })
+                } else {
+                    Ok(Self::Addi { rd, imm, word })
+                }
+            }
+            (0b01, C1_ADDIW) => {
+                let word_fields = CompressedWord::new(word);
+                let rd = word_fields.rd();
+                if rd == ZERO_REGISTER {
+                    return Err(Trap::IllegalInstruction);
+                }
+                Ok(Self::Addiw {
+                    rd,
+                    imm: word_fields.ci_immediate(),
+                    word,
+                })
+            }
+            (0b01, C1_LI) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Li {
+                    rd: word_fields.rd(),
+                    imm: word_fields.ci_immediate(),
+                    word,
+                })
+            }
+            (0b01, C1_LUI_OR_ADDI16SP) => {
+                let word_fields = CompressedWord::new(word);
+                let rd = word_fields.rd();
+                if rd == SP {
+                    let imm = word_fields.addi16sp_immediate();
+                    if imm == ZERO_IMMEDIATE {
+                        return Err(Trap::IllegalInstruction);
+                    }
+                    Ok(Self::Addi16sp { imm, word })
+                } else {
+                    let imm = word_fields.lui_immediate();
+                    if imm == ZERO_IMMEDIATE {
+                        return Err(Trap::IllegalInstruction);
+                    }
+                    Ok(Self::Lui { rd, imm, word })
+                }
+            }
+            (0b01, C1_ALU) => {
+                let word_fields = CompressedWord::new(word);
+                let rd = word_fields.rs1_prime();
+                let register_width = word_fields.bits(
+                    COMPRESSED_ALU_WIDTH_FLAG_SHIFT,
+                    COMPRESSED_ALU_WIDTH_FLAG_BITS,
+                );
+                match word_fields.bits(COMPRESSED_ALU_FUNCT2_SHIFT, COMPRESSED_ALU_FUNCT2_BITS) {
+                    C_ALU_SRLI => Ok(Self::Srli {
+                        rd,
+                        shamt: word_fields.shamt(),
+                        word,
+                    }),
+                    C_ALU_SRAI => Ok(Self::Srai {
+                        rd,
+                        shamt: word_fields.shamt(),
+                        word,
+                    }),
+                    C_ALU_ANDI => Ok(Self::Andi {
+                        rd,
+                        imm: word_fields.ci_immediate(),
+                        word,
+                    }),
+                    C_ALU_REGISTER if register_width == C_ALU_REGISTER_BASE => {
+                        let rs2 = word_fields.rd_prime();
+                        match word_fields.bits(COMPRESSED_ALU_RS2_SHIFT, COMPRESSED_ALU_RS2_BITS) {
+                            C_ALU_SUB => Ok(Self::Sub { rd, rs2, word }),
+                            C_ALU_XOR => Ok(Self::Xor { rd, rs2, word }),
+                            C_ALU_OR => Ok(Self::Or { rd, rs2, word }),
+                            C_ALU_AND => Ok(Self::And { rd, rs2, word }),
+                            _ => unreachable!(),
+                        }
+                    }
+                    C_ALU_REGISTER if register_width == C_ALU_REGISTER_WORD => {
+                        let rs2 = word_fields.rd_prime();
+                        match word_fields.bits(COMPRESSED_ALU_RS2_SHIFT, COMPRESSED_ALU_RS2_BITS) {
+                            C_ALU_SUBW => Ok(Self::Subw { rd, rs2, word }),
+                            C_ALU_ADDW => Ok(Self::Addw { rd, rs2, word }),
+                            _ => Err(Trap::IllegalInstruction),
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            (0b01, C1_J) => Ok(Self::J {
+                offset: CompressedWord::new(word).jump_offset(),
+                word,
+            }),
+            (0b01, C1_BEQZ) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Beqz {
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.branch_offset(),
+                    word,
+                })
+            }
+            (0b01, C1_BNEZ) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Bnez {
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.branch_offset(),
+                    word,
+                })
+            }
+            (0b10, C2_SLLI) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Slli {
+                    rd: word_fields.rd(),
+                    shamt: word_fields.shamt(),
+                    word,
+                })
+            }
+            (0b10, C2_LWSP) => {
+                let word_fields = CompressedWord::new(word);
+                let rd = word_fields.rd();
+                if rd == ZERO_REGISTER {
+                    return Err(Trap::IllegalInstruction);
+                }
+                Ok(Self::Lwsp {
+                    rd,
+                    offset: word_fields.lwsp_offset(),
+                    word,
+                })
+            }
+            (0b10, C2_LDSP) => {
+                let word_fields = CompressedWord::new(word);
+                let rd = word_fields.rd();
+                if rd == ZERO_REGISTER {
+                    return Err(Trap::IllegalInstruction);
+                }
+                Ok(Self::Ldsp {
+                    rd,
+                    offset: word_fields.ldsp_offset(),
+                    word,
+                })
+            }
+            (0b10, C2_MISC) => {
+                let word_fields = CompressedWord::new(word);
+                let rd = word_fields.rd();
+                let rs2 = word_fields.rs2();
+                match (
+                    word_fields.bits(
+                        COMPRESSED_MISC_WIDTH_FLAG_SHIFT,
+                        COMPRESSED_MISC_WIDTH_FLAG_BITS,
+                    ),
+                    rd,
+                    rs2,
+                ) {
+                    (C_MISC_JR_OR_MV, C_MISC_EMPTY_REGISTER, C_MISC_EMPTY_REGISTER) => {
+                        Err(Trap::IllegalInstruction)
+                    }
+                    (C_MISC_JR_OR_MV, _, C_MISC_EMPTY_REGISTER) => Ok(Self::Jr { rs1: rd, word }),
+                    (C_MISC_JR_OR_MV, _, _) => Ok(Self::Mv { rd, rs2, word }),
+                    (C_MISC_EBREAK_OR_JALR, C_MISC_EMPTY_REGISTER, C_MISC_EMPTY_REGISTER) => {
+                        Ok(Self::Ebreak { word })
+                    }
+                    (C_MISC_EBREAK_OR_JALR, _, C_MISC_EMPTY_REGISTER) => {
+                        Ok(Self::Jalr { rs1: rd, word })
+                    }
+                    (C_MISC_EBREAK_OR_JALR, _, _) => Ok(Self::Add { rd, rs2, word }),
+                    _ => unreachable!(),
+                }
+            }
+            (0b10, C2_SWSP) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Swsp {
+                    rs2: word_fields.rs2(),
+                    offset: word_fields.swsp_offset(),
+                    word,
+                })
+            }
+            (0b10, C2_SDSP) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Sdsp {
+                    rs2: word_fields.rs2(),
+                    offset: word_fields.sdsp_offset(),
+                    word,
+                })
+            }
+            _ => Err(Trap::IllegalInstruction),
+        }
+    }
+
+    /// Expands this compressed form into its canonical standard encoding.
+    fn decompress(self) -> u32 {
+        match self {
+            Self::Addi4spn { rd, imm, .. } => encode_i(inst::MATCH_ADDI, rd, SP, imm),
+            Self::Lw {
+                rd, rs1, offset, ..
+            } => encode_i(inst::MATCH_LW, rd, rs1, offset),
+            Self::Ld {
+                rd, rs1, offset, ..
+            } => encode_i(inst::MATCH_LD, rd, rs1, offset),
+            Self::Sw {
+                rs2, rs1, offset, ..
+            } => {
+                encode_immediate(inst::MATCH_SW, offset, S_IMMEDIATE_FIELDS)
+                    | store_register_fields(rs1, rs2)
+            }
+            Self::Sd {
+                rs2, rs1, offset, ..
+            } => {
+                encode_immediate(inst::MATCH_SD, offset, S_IMMEDIATE_FIELDS)
+                    | store_register_fields(rs1, rs2)
+            }
+            Self::Addi { rd, imm, .. } => encode_i(inst::MATCH_ADDI, rd, rd, imm),
+            Self::Nop { .. } => encode_nop(),
+            Self::Addiw { rd, imm, .. } => encode_i(inst::MATCH_ADDIW, rd, rd, imm),
+            Self::Li { rd, imm, .. } => encode_i(inst::MATCH_ADDI, rd, ZERO_REGISTER, imm),
+            Self::Lui { rd, imm, .. } => encode_u(inst::MATCH_LUI, rd, imm),
+            Self::Addi16sp { imm, .. } => encode_i(inst::MATCH_ADDI, SP, SP, imm),
+            Self::Srli { rd, shamt, .. } => encode_i(inst::MATCH_SRLI, rd, rd, i64::from(shamt)),
+            Self::Srai { rd, shamt, .. } => encode_i(inst::MATCH_SRAI, rd, rd, i64::from(shamt)),
+            Self::Andi { rd, imm, .. } => encode_i(inst::MATCH_ANDI, rd, rd, imm),
+            Self::Sub { rd, rs2, .. } => encode_r(inst::MATCH_SUB, rd, rd, rs2),
+            Self::Xor { rd, rs2, .. } => encode_r(inst::MATCH_XOR, rd, rd, rs2),
+            Self::Or { rd, rs2, .. } => encode_r(inst::MATCH_OR, rd, rd, rs2),
+            Self::And { rd, rs2, .. } => encode_r(inst::MATCH_AND, rd, rd, rs2),
+            Self::Subw { rd, rs2, .. } => encode_r(inst::MATCH_SUBW, rd, rd, rs2),
+            Self::Addw { rd, rs2, .. } => encode_r(inst::MATCH_ADDW, rd, rd, rs2),
+            Self::J { offset, .. } => {
+                encode_immediate(inst::MATCH_JAL, offset, STANDARD_J_IMMEDIATE_FIELDS)
+            }
+            Self::Beqz { rs1, offset, .. } => {
+                encode_immediate(inst::MATCH_BEQ, offset, STANDARD_B_IMMEDIATE_FIELDS)
+                    | (u32::from(rs1) << STANDARD_RS1_SHIFT)
+            }
+            Self::Bnez { rs1, offset, .. } => {
+                encode_immediate(inst::MATCH_BNE, offset, STANDARD_B_IMMEDIATE_FIELDS)
+                    | (u32::from(rs1) << STANDARD_RS1_SHIFT)
+            }
+            Self::Slli { rd, shamt, .. } => encode_i(inst::MATCH_SLLI, rd, rd, i64::from(shamt)),
+            Self::Lwsp { rd, offset, .. } => encode_i(inst::MATCH_LW, rd, SP, offset),
+            Self::Ldsp { rd, offset, .. } => encode_i(inst::MATCH_LD, rd, SP, offset),
+            Self::Jr { rs1, .. } => encode_i(inst::MATCH_JALR, ZERO_REGISTER, rs1, ZERO_OFFSET),
+            Self::Mv { rd, rs2, .. } => encode_r(inst::MATCH_ADD, rd, ZERO_REGISTER, rs2),
+            Self::Ebreak { .. } => inst::MATCH_EBREAK,
+            Self::Jalr { rs1, .. } => encode_i(inst::MATCH_JALR, RA, rs1, ZERO_OFFSET),
+            Self::Add { rd, rs2, .. } => encode_r(inst::MATCH_ADD, rd, rd, rs2),
+            Self::Swsp { rs2, offset, .. } => {
+                encode_immediate(inst::MATCH_SW, offset, S_IMMEDIATE_FIELDS)
+                    | (u32::from(SP) << STANDARD_RS1_SHIFT)
+                    | (u32::from(rs2) << STANDARD_RS2_SHIFT)
+            }
+            Self::Sdsp { rs2, offset, .. } => {
+                encode_immediate(inst::MATCH_SD, offset, S_IMMEDIATE_FIELDS)
+                    | (u32::from(SP) << STANDARD_RS1_SHIFT)
+                    | (u32::from(rs2) << STANDARD_RS2_SHIFT)
+            }
+        }
+    }
+
+    fn render(self) -> String {
+        match self {
+            Self::Addi4spn { rd, imm, .. } => {
+                format!("c.addi4spn {},{},{imm}", abi_name(rd), abi_name(SP))
+            }
+            Self::Lw {
+                rd, rs1, offset, ..
+            } => {
+                format!("c.lw {},{offset}({})", abi_name(rd), abi_name(rs1))
+            }
+            Self::Ld {
+                rd, rs1, offset, ..
+            } => {
+                format!("c.ld {},{offset}({})", abi_name(rd), abi_name(rs1))
+            }
+            Self::Sw {
+                rs2, rs1, offset, ..
+            } => format!("c.sw {},{offset}({})", abi_name(rs2), abi_name(rs1)),
+            Self::Sd {
+                rs2, rs1, offset, ..
+            } => format!("c.sd {},{offset}({})", abi_name(rs2), abi_name(rs1)),
+            Self::Addi { rd, imm, .. } => format!("c.addi {},{imm}", abi_name(rd)),
+            Self::Nop { imm, .. } => format!("c.addi zero,{imm}"),
+            Self::Addiw { rd, imm, .. } => format!("c.addiw {},{imm}", abi_name(rd)),
+            Self::Li { rd, imm, .. } => format!("c.li {},{imm}", abi_name(rd)),
+            Self::Lui { rd, imm, .. } => {
+                format!("c.lui {},{:#x}", abi_name(rd), imm >> U_IMMEDIATE_SHIFT)
+            }
+            Self::Addi16sp { imm, .. } => {
+                format!("c.addi16sp {},{imm}", abi_name(SP))
+            }
+            Self::Srli { rd, shamt, .. } => format!("c.srli {},{shamt:#x}", abi_name(rd)),
+            Self::Srai { rd, shamt, .. } => format!("c.srai {},{shamt:#x}", abi_name(rd)),
+            Self::Andi { rd, imm, .. } => format!("c.andi {},{imm}", abi_name(rd)),
+            Self::Sub { rd, rs2, .. } => format!("c.sub {},{}", abi_name(rd), abi_name(rs2)),
+            Self::Xor { rd, rs2, .. } => format!("c.xor {},{}", abi_name(rd), abi_name(rs2)),
+            Self::Or { rd, rs2, .. } => format!("c.or {},{}", abi_name(rd), abi_name(rs2)),
+            Self::And { rd, rs2, .. } => format!("c.and {},{}", abi_name(rd), abi_name(rs2)),
+            Self::Subw { rd, rs2, .. } => format!("c.subw {},{}", abi_name(rd), abi_name(rs2)),
+            Self::Addw { rd, rs2, .. } => format!("c.addw {},{}", abi_name(rd), abi_name(rs2)),
+            Self::J { offset, .. } => format!("c.j {}", relative(offset)),
+            Self::Beqz { rs1, offset, .. } => {
+                format!("c.beqz {},{}", abi_name(rs1), relative(offset))
+            }
+            Self::Bnez { rs1, offset, .. } => {
+                format!("c.bnez {},{}", abi_name(rs1), relative(offset))
+            }
+            Self::Slli { rd, shamt, .. } => format!("c.slli {},{shamt:#x}", abi_name(rd)),
+            Self::Lwsp { rd, offset, .. } => format!("c.lwsp {},{offset}(sp)", abi_name(rd)),
+            Self::Ldsp { rd, offset, .. } => format!("c.ldsp {},{offset}(sp)", abi_name(rd)),
+            Self::Jr { rs1, .. } => format!("c.jr {}", abi_name(rs1)),
+            Self::Mv { rd, rs2, .. } => format!("c.mv {},{}", abi_name(rd), abi_name(rs2)),
+            Self::Ebreak { .. } => "c.ebreak".to_owned(),
+            Self::Jalr { rs1, .. } => format!("c.jalr {}", abi_name(rs1)),
+            Self::Add { rd, rs2, .. } => format!("c.add {},{}", abi_name(rd), abi_name(rs2)),
+            Self::Swsp { rs2, offset, .. } => {
+                format!("c.swsp {},{offset}(sp)", abi_name(rs2))
+            }
+            Self::Sdsp { rs2, offset, .. } => {
+                format!("c.sdsp {},{offset}(sp)", abi_name(rs2))
+            }
+        }
+    }
+}
+
+/// A 16-bit compressed instruction word.
+#[derive(Clone, Copy)]
+struct CompressedWord(u16);
+
+impl CompressedWord {
+    const fn new(word: u16) -> Self {
+        Self(word)
+    }
+
+    fn bits(self, shift: u32, width: u32) -> u16 {
+        (self.0 >> shift) & mask_u16(width)
+    }
+
+    fn gather(self, fields: &[Field]) -> u16 {
+        fields.iter().fold(0, |value, field| {
+            value | (self.bits(field.source_shift, field.width) << field.target_shift)
+        })
+    }
+
+    fn rd(self) -> u8 {
+        self.bits(COMPRESSED_RD_SHIFT, REGISTER_BITS) as u8
+    }
+
+    fn rs2(self) -> u8 {
+        self.bits(COMPRESSED_RS2_SHIFT, REGISTER_BITS) as u8
+    }
+
+    fn rd_prime(self) -> u8 {
+        PRIME_REGISTER_BASE + self.bits(PRIME_RD_SHIFT, PRIME_REGISTER_BITS) as u8
+    }
+
+    fn rs1_prime(self) -> u8 {
+        PRIME_REGISTER_BASE + self.bits(PRIME_RS1_SHIFT, PRIME_REGISTER_BITS) as u8
+    }
+
+    fn signed_immediate(self, value: u16, width: u32) -> i64 {
+        sign_extend(u32::from(value), width)
+    }
+
+    fn ci_immediate(self) -> i64 {
+        self.signed_immediate(self.gather(CI_IMMEDIATE_FIELDS), CI_IMMEDIATE_BITS)
+    }
+
+    fn shamt(self) -> u8 {
+        self.gather(CI_IMMEDIATE_FIELDS) as u8
+    }
+
+    fn addi4spn_immediate(self) -> i64 {
+        i64::from(self.gather(ADDI4SPN_IMMEDIATE_FIELDS))
+    }
+
+    fn lui_immediate(self) -> i64 {
+        self.ci_immediate() << U_IMMEDIATE_SHIFT
+    }
+
+    fn addi16sp_immediate(self) -> i64 {
+        self.signed_immediate(
+            self.gather(ADDI16SP_IMMEDIATE_FIELDS),
+            ADDI16SP_IMMEDIATE_BITS,
+        )
+    }
+
+    fn lw_offset(self) -> i64 {
+        i64::from(self.gather(LW_IMMEDIATE_FIELDS))
+    }
+
+    fn ld_offset(self) -> i64 {
+        i64::from(self.gather(LD_IMMEDIATE_FIELDS))
+    }
+
+    fn jump_offset(self) -> i64 {
+        self.signed_immediate(self.gather(J_IMMEDIATE_FIELDS), JUMP_IMMEDIATE_BITS)
+    }
+
+    fn branch_offset(self) -> i64 {
+        self.signed_immediate(self.gather(B_IMMEDIATE_FIELDS), BRANCH_IMMEDIATE_BITS)
+    }
+
+    fn lwsp_offset(self) -> i64 {
+        i64::from(self.gather(LWSP_IMMEDIATE_FIELDS))
+    }
+
+    fn ldsp_offset(self) -> i64 {
+        i64::from(self.gather(LDSP_IMMEDIATE_FIELDS))
+    }
+
+    fn swsp_offset(self) -> i64 {
+        i64::from(self.gather(SWSP_IMMEDIATE_FIELDS))
+    }
+
+    fn sdsp_offset(self) -> i64 {
+        i64::from(self.gather(SDSP_IMMEDIATE_FIELDS))
+    }
 }
 
 impl Instruction {
@@ -862,12 +1820,39 @@ fn relative(offset: i64) -> String {
 /// The 20-bit U-type field as `objdump` prints it: the immediate before its
 /// 12-bit shift.
 fn u_field(imm: i64) -> u32 {
-    ((imm >> 12) as u32) & 0xfffff
+    ((imm >> U_IMMEDIATE_SHIFT) as u32) & U_FIELD_MASK
 }
 
-/// Decodes a 32-bit instruction word.
+/// Decodes a 32-bit or compressed instruction word.
 pub fn decode(word: u32) -> Result<Instruction, Trap> {
-    opcodes::lookup(Word::new(word)).ok_or(Trap::IllegalInstruction)
+    decode_word(word).map(DecodedInstruction::instruction)
+}
+
+/// Decodes and renders an instruction exactly as the trace will print it.
+pub fn render(word: u32) -> Result<String, Trap> {
+    decode_word(word).map(DecodedInstruction::render)
+}
+
+/// Whether the low instruction parcel selects a compressed encoding.
+pub fn is_compressed(word: u32) -> bool {
+    word & mask_u32(MINOR_OPCODE_BITS) != u32::from(STANDARD_MINOR_OPCODE)
+}
+
+/// Decodes an instruction word while retaining its length and original encoding.
+pub(crate) fn decode_word(word: u32) -> Result<DecodedInstruction, Trap> {
+    if is_compressed(word) {
+        let compressed = CompressedInstruction::decode(word as u16)?;
+        let standard_word = compressed.decompress();
+        let instruction =
+            opcodes::lookup(Word::new(standard_word)).ok_or(Trap::IllegalInstruction)?;
+        Ok(DecodedInstruction {
+            instruction,
+            encoding: Encoding::Compressed(compressed),
+        })
+    } else {
+        let instruction = opcodes::lookup(Word::new(word)).ok_or(Trap::IllegalInstruction)?;
+        Ok(DecodedInstruction::standard(instruction, word))
+    }
 }
 
 /// A 32-bit instruction word whose accessors are named as the spec names its
@@ -888,37 +1873,43 @@ impl Word {
 
     /// Bits `[shift + width - 1 : shift]`.
     fn bits(self, shift: u32, width: u32) -> u32 {
-        (self.0 >> shift) & ((1 << width) - 1)
+        (self.0 >> shift) & mask_u32(width)
+    }
+
+    fn gather(self, fields: &[Field]) -> u32 {
+        fields.iter().fold(0, |value, field| {
+            value | (self.bits(field.source_shift, field.width) << field.target_shift)
+        })
     }
 
     /// Destination register, bits 11:7.
     pub(crate) fn rd(self) -> u8 {
-        self.bits(7, 5) as u8
+        self.bits(STANDARD_RD_SHIFT, REGISTER_BITS) as u8
     }
 
     /// First source register, bits 19:15.
     pub(crate) fn rs1(self) -> u8 {
-        self.bits(15, 5) as u8
+        self.bits(STANDARD_RS1_SHIFT, REGISTER_BITS) as u8
     }
 
     /// Second source register, bits 24:20.
     pub(crate) fn rs2(self) -> u8 {
-        self.bits(20, 5) as u8
+        self.bits(STANDARD_RS2_SHIFT, REGISTER_BITS) as u8
     }
 
     /// Acquire-ordering bit, bit 26.
     pub(crate) fn aq(self) -> bool {
-        self.bits(26, 1) != 0
+        self.bits(STANDARD_AQ_SHIFT, SINGLE_BIT_WIDTH) != 0
     }
 
     /// Release-ordering bit, bit 25.
     pub(crate) fn rl(self) -> bool {
-        self.bits(25, 1) != 0
+        self.bits(STANDARD_RL_SHIFT, SINGLE_BIT_WIDTH) != 0
     }
 
     /// CSR address, bits 31:20.
     pub(crate) fn csr(self) -> u16 {
-        self.bits(20, 12) as u16
+        self.bits(STANDARD_CSR_SHIFT, STANDARD_CSR_BITS) as u16
     }
 
     /// Five-bit unsigned immediate for the immediate CSR operations.
@@ -928,61 +1919,158 @@ impl Word {
 
     /// I-type immediate: `imm[11:0]`, bits 31:20.
     pub(crate) fn i_immediate(self) -> i64 {
-        sign_extend(self.bits(20, 12), 12)
+        sign_extend(self.gather(I_IMMEDIATE_FIELDS), I_IMMEDIATE_BITS)
     }
 
     /// U-type immediate: `imm[31:12]` shifted into place.
     pub(crate) fn u_immediate(self) -> i64 {
-        sign_extend(self.bits(12, 20), 20) << 12
+        sign_extend(self.gather(U_IMMEDIATE_FIELDS), U_IMMEDIATE_BITS) << U_IMMEDIATE_SHIFT
     }
 
     /// S-type immediate: `imm[11:5]` at bits 31:25, `imm[4:0]` at bits 11:7.
     pub(crate) fn s_immediate(self) -> i64 {
-        let value = (self.bits(25, 7) << 5) | self.bits(7, 5);
-        sign_extend(value, 12)
+        sign_extend(self.gather(S_IMMEDIATE_FIELDS), S_IMMEDIATE_BITS)
     }
 
     /// Fence predecessor set, bits 27:24.
     pub(crate) fn pred(self) -> u8 {
-        self.bits(24, 4) as u8
+        self.bits(STANDARD_FENCE_PRED_SHIFT, STANDARD_FENCE_BITS) as u8
     }
 
     /// Fence successor set, bits 23:20.
     pub(crate) fn succ(self) -> u8 {
-        self.bits(20, 4) as u8
+        self.bits(STANDARD_FENCE_SUCC_SHIFT, STANDARD_FENCE_BITS) as u8
     }
 
     /// Shift amount of the 64-bit shifts: `imm[5:0]`.
     pub(crate) fn shamt(self) -> u8 {
-        self.bits(20, 6) as u8
+        self.bits(STANDARD_SHIFT_AMOUNT_SHIFT, STANDARD_SHIFT_AMOUNT_BITS) as u8
     }
 
     /// Shift amount of the W-forms: `imm[4:0]`.
     pub(crate) fn shamt_w(self) -> u8 {
-        self.bits(20, 5) as u8
+        self.bits(STANDARD_SHIFT_AMOUNT_SHIFT, WORD_SHIFT_AMOUNT_BITS) as u8
     }
 
     /// B-type offset: `imm[12|10:5]` at bits 31:25, `imm[4:1|11]` at bits 11:7.
     pub(crate) fn b_immediate(self) -> i64 {
-        let value = (self.bits(31, 1) << 12)
-            | (self.bits(7, 1) << 11)
-            | (self.bits(25, 6) << 5)
-            | (self.bits(8, 4) << 1);
-        sign_extend(value, 13)
+        sign_extend(self.gather(STANDARD_B_IMMEDIATE_FIELDS), B_IMMEDIATE_BITS)
     }
 
     /// J-type offset: `imm[20|10:1|11|19:12]`, bits 31:12.
     pub(crate) fn j_immediate(self) -> i64 {
-        let value = (self.bits(31, 1) << 20)
-            | (self.bits(12, 8) << 12)
-            | (self.bits(20, 1) << 11)
-            | (self.bits(21, 10) << 1);
-        sign_extend(value, 21)
+        sign_extend(self.gather(STANDARD_J_IMMEDIATE_FIELDS), J_IMMEDIATE_BITS)
     }
 }
 
 /// Sign-extends the low `width` bits of `value` to 64 bits.
 fn sign_extend(value: u32, width: u32) -> i64 {
-    let shift = 64 - width;
+    let shift = XLEN - width;
     (i64::from(value) << shift) >> shift
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const C_ADDI4SPN_A5_SP_32: u32 = 0x101c;
+    const C_ADDI16SP_SP_16: u32 = 0x6141;
+    const C_ADDI16SP_SP_496: u32 = 0x617d;
+    const C_ADDI16SP_SP_MINUS_512: u32 = 0x7101;
+    const C_LD_A2_8_S0: u32 = 0x6410;
+    const C_BEQZ_A5_PC_PLUS_4: u32 = 0xc391;
+    const C_J_PC_PLUS_4: u32 = 0xa011;
+    const C_JALR_S8: u32 = 0x9c02;
+    const C_JR_RA: u32 = 0x8082;
+    const C_ADDI_ZERO_1_HINT: u32 = 0x0005;
+    const C_MV_ZERO_RA_HINT: u32 = 0x8006;
+    const C_ADD_ZERO_RA_HINT: u32 = 0x9006;
+    const C_SLLI_ZERO_0_HINT: u32 = 0x0002;
+    const C_SRLI_S0_0_HINT: u32 = 0x8001;
+    const C_EBREAK: u32 = 0x9002;
+    const C_ALL_ZERO_RESERVED: u32 = 0x0000;
+    const C_ADDIW_ZERO_RESERVED: u32 = 0x2001;
+    const C_ADDI16SP_ZERO_RESERVED: u32 = 0x6101;
+    const C_LWSP_ZERO_RESERVED: u32 = 0x4002;
+    const C_JR_ZERO_RESERVED: u32 = 0x8002;
+    const C_ZEXT_B_UNAVAILABLE: u32 = 0x9c61;
+
+    #[test]
+    fn compressed_immediates_and_control_flow_decode() {
+        assert_eq!(render(C_ADDI4SPN_A5_SP_32).unwrap(), "c.addi4spn a5,sp,32");
+        assert_eq!(render(C_ADDI16SP_SP_16).unwrap(), "c.addi16sp sp,16");
+        assert_eq!(render(C_ADDI16SP_SP_496).unwrap(), "c.addi16sp sp,496");
+        assert_eq!(
+            render(C_ADDI16SP_SP_MINUS_512).unwrap(),
+            "c.addi16sp sp,-512"
+        );
+        assert_eq!(render(C_LD_A2_8_S0).unwrap(), "c.ld a2,8(s0)");
+        assert_eq!(render(C_BEQZ_A5_PC_PLUS_4).unwrap(), "c.beqz a5,pc + 0x4");
+        assert_eq!(render(C_J_PC_PLUS_4).unwrap(), "c.j pc + 0x4");
+        assert_eq!(render(C_JALR_S8).unwrap(), "c.jalr s8");
+        assert_eq!(render(C_JR_RA).unwrap(), "c.jr ra");
+    }
+
+    #[test]
+    fn compressed_hints_remain_legal_no_ops() {
+        assert_eq!(
+            decode(C_ADDI_ZERO_1_HINT).unwrap(),
+            Instruction::Addi {
+                rd: 0,
+                rs1: 0,
+                imm: 0
+            }
+        );
+        assert_eq!(
+            decode(C_MV_ZERO_RA_HINT).unwrap(),
+            Instruction::Add {
+                rd: 0,
+                rs1: 0,
+                rs2: 1
+            }
+        );
+        assert_eq!(
+            decode(C_ADD_ZERO_RA_HINT).unwrap(),
+            Instruction::Add {
+                rd: 0,
+                rs1: 0,
+                rs2: 1
+            }
+        );
+        assert_eq!(
+            decode(C_SLLI_ZERO_0_HINT).unwrap(),
+            Instruction::Slli {
+                rd: 0,
+                rs1: 0,
+                shamt: 0
+            }
+        );
+        assert_eq!(
+            decode(C_SRLI_S0_0_HINT).unwrap(),
+            Instruction::Srli {
+                rd: 8,
+                rs1: 8,
+                shamt: 0
+            }
+        );
+    }
+
+    #[test]
+    fn reserved_and_unavailable_compressed_encodings_are_illegal() {
+        for word in [
+            C_ALL_ZERO_RESERVED,
+            C_ADDIW_ZERO_RESERVED,
+            C_ADDI16SP_ZERO_RESERVED,
+            C_LWSP_ZERO_RESERVED,
+            C_JR_ZERO_RESERVED,
+            C_ZEXT_B_UNAVAILABLE,
+        ] {
+            assert_eq!(decode(word), Err(Trap::IllegalInstruction), "{word:#06x}");
+        }
+    }
+
+    #[test]
+    fn c_ebreak_decodes_as_ebreak() {
+        assert_eq!(decode(C_EBREAK), Ok(Instruction::Ebreak));
+    }
 }

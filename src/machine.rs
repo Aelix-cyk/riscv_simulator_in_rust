@@ -2,12 +2,14 @@
 
 use crate::bus::Bus;
 use crate::cpu::Cpu;
-use crate::decode::{Instruction, decode};
+use crate::decode::{DecodedInstruction, Instruction, decode_word, is_compressed};
 use crate::inst;
 use crate::trap::Trap;
 
-/// Width of a 32-bit instruction; the C extension will add a 16-bit case.
-const INSTRUCTION_BYTES: u64 = 4;
+/// Smallest legal instruction width with Zca implemented.
+const MIN_INSTRUCTION_BYTES: u64 = 2;
+const HALFWORD_BITS: u32 = 16;
+const EMPTY_INSTRUCTION_BITS: u32 = 0;
 const RESERVATION_BYTES: u64 = 8;
 const RESERVATION_ALIGNMENT_MASK: u64 = !(RESERVATION_BYTES - 1);
 
@@ -16,6 +18,13 @@ const RESERVATION_ALIGNMENT_MASK: u64 = !(RESERVATION_BYTES - 1);
 struct Exception {
     cause: u8,
     tval: u64,
+}
+
+/// A failed fetch or decode, retaining instruction bits for `mtval`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FetchFailure {
+    trap: Trap,
+    raw: u32,
 }
 
 impl Exception {
@@ -52,11 +61,6 @@ pub enum RunOutcome {
 pub struct StepOptions {
     /// Print the original PC and decoded instruction before execution.
     pub trace: bool,
-}
-
-/// Prints one instruction in the CLI trace format.
-fn print_trace(pc: u64, instruction: &Instruction) {
-    println!("{pc:#010x}  {}", instruction.render());
 }
 
 /// One hart and the bus it fetches from and executes against.
@@ -105,8 +109,9 @@ impl<B: Bus> Machine<B> {
 
     /// Fetches and decodes the instruction at the PC, without executing it.
     pub fn fetch(&mut self) -> Result<Instruction, Trap> {
-        let word = self.fetch_word()?;
-        decode(word)
+        self.fetch_decoded()
+            .map(DecodedInstruction::instruction)
+            .map_err(|failure| failure.trap)
     }
 
     /// Fetches, decodes, and executes one instruction.
@@ -115,24 +120,17 @@ impl<B: Bus> Machine<B> {
     /// escaping this method.
     pub fn step(&mut self, options: StepOptions) {
         let pc = self.cpu.pc();
-        let word = match self.fetch_word() {
-            Ok(word) => word,
-            Err(trap) => {
-                self.enter_trap(self.fetch_exception(pc, 0, trap));
-                return;
-            }
-        };
-        let instruction = match decode(word) {
+        let instruction = match self.fetch_decoded() {
             Ok(instruction) => instruction,
-            Err(trap) => {
-                self.enter_trap(self.fetch_exception(pc, word, trap));
+            Err(failure) => {
+                self.enter_trap(self.fetch_exception(pc, failure.raw, failure.trap));
                 return;
             }
         };
         if options.trace {
-            print_trace(pc, &instruction);
+            println!("{pc:#010x}  {}", instruction.render());
         }
-        self.execute_with_word(instruction, word);
+        self.execute_with_decoded(instruction);
     }
 
     /// Runs until the halt self-loop retires or `step_limit` steps are taken.
@@ -150,16 +148,38 @@ impl<B: Bus> Machine<B> {
     ///
     /// Synchronous faults enter the machine-mode trap handler.
     pub fn execute(&mut self, instruction: Instruction) {
-        self.execute_with_word(instruction, instruction_word(instruction));
+        let decoded = DecodedInstruction::standard(instruction, instruction_word(instruction));
+        self.execute_with_decoded(decoded);
     }
 
-    /// Fetches the raw instruction word and checks its address alignment.
-    fn fetch_word(&mut self) -> Result<u32, Trap> {
+    /// Fetches and decodes one compressed or standard instruction.
+    fn fetch_decoded(&mut self) -> Result<DecodedInstruction, FetchFailure> {
         let pc = self.cpu.pc();
-        if !pc.is_multiple_of(INSTRUCTION_BYTES) {
-            return Err(Trap::InstructionAddressMisaligned);
+        if !pc.is_multiple_of(MIN_INSTRUCTION_BYTES) {
+            return Err(FetchFailure {
+                trap: Trap::InstructionAddressMisaligned,
+                raw: EMPTY_INSTRUCTION_BITS,
+            });
         }
-        self.bus.read_u32(pc)
+        let low = self.bus.read_u16(pc).map_err(|trap| FetchFailure {
+            trap,
+            raw: EMPTY_INSTRUCTION_BITS,
+        })?;
+        if is_compressed(u32::from(low)) {
+            return decode_word(u32::from(low)).map_err(|trap| FetchFailure {
+                trap,
+                raw: u32::from(low),
+            });
+        }
+        let high = self
+            .bus
+            .read_u16(pc.wrapping_add(MIN_INSTRUCTION_BYTES))
+            .map_err(|trap| FetchFailure {
+                trap,
+                raw: EMPTY_INSTRUCTION_BITS,
+            })?;
+        let word = u32::from(low) | (u32::from(high) << HALFWORD_BITS);
+        decode_word(word).map_err(|trap| FetchFailure { trap, raw: word })
     }
 
     /// Converts a fetch/decode fault into its architectural exception.
@@ -175,8 +195,8 @@ impl<B: Bus> Machine<B> {
 
     /// Executes an instruction with the exact fetched encoding available for
     /// `mtval`, then delivers any synchronous exception to the trap handler.
-    fn execute_with_word(&mut self, instruction: Instruction, word: u32) {
-        if let Err(exception) = self.execute_inner(instruction, word) {
+    fn execute_with_decoded(&mut self, decoded: DecodedInstruction) {
+        if let Err(exception) = self.execute_inner(decoded) {
             self.enter_trap(exception);
         }
     }
@@ -192,9 +212,11 @@ impl<B: Bus> Machine<B> {
     }
 
     /// Executes one instruction without delivering exceptions.
-    fn execute_inner(&mut self, instruction: Instruction, word: u32) -> Result<(), Exception> {
+    fn execute_inner(&mut self, decoded: DecodedInstruction) -> Result<(), Exception> {
+        let instruction = decoded.instruction();
+        let word = decoded.raw();
         let pc = self.cpu.pc();
-        let mut next_pc = pc.wrapping_add(INSTRUCTION_BYTES);
+        let mut next_pc = pc.wrapping_add(decoded.length());
 
         match instruction {
             Instruction::Addi { rd, rs1, imm } => {
@@ -672,7 +694,7 @@ impl<B: Bus> Machine<B> {
             }
             Instruction::Jal { rd, offset } => {
                 // `jal x0, 0` is the halt convention: no link, no movement.
-                if rd == 0 && offset == 0 {
+                if decoded.is_standard_jal_self_loop() {
                     self.halted = true;
                     return Ok(());
                 }
@@ -783,9 +805,9 @@ impl<B: Bus> Machine<B> {
         Ok(())
     }
 
-    /// Checks that a control-transfer target is four-byte aligned.
+    /// Checks that a control-transfer target is two-byte aligned.
     fn checked_target(target: u64) -> Result<u64, Exception> {
-        if !target.is_multiple_of(INSTRUCTION_BYTES) {
+        if !target.is_multiple_of(MIN_INSTRUCTION_BYTES) {
             return Err(Exception::new(inst::CAUSE_MISALIGNED_FETCH, target));
         }
         Ok(target)
@@ -867,9 +889,19 @@ fn shift_32(value: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cpu::RA;
+    use crate::decode::decode;
     use crate::memory::{DRAM_BASE, Memory};
 
     const HANDLER: u64 = DRAM_BASE + 32;
+    const COMPRESSED_ADD_X5_ONE: u16 = 0x4285;
+    const COMPRESSED_ADDI_X5_ONE: u16 = 0x0285;
+    const STANDARD_ADDI_X5_X0_THREE: u32 = 0x0030_0293;
+    const COMPRESSED_J_SELF: u16 = 0xa001;
+    const COMPRESSED_EBREAK: u16 = 0x9002;
+    const ILLEGAL_COMPRESSED_ZERO: u16 = 0;
+    const TEST_REGISTER_X5: usize = 5;
+    const STANDARD_INSTRUCTION_BYTES: u64 = 4;
 
     struct WriteFaultBus(Memory);
 
@@ -1575,19 +1607,70 @@ mod tests {
     }
 
     #[test]
-    fn jalr_to_a_misaligned_target_traps_without_linking() {
-        let mut machine = trapped_machine();
-        machine.cpu_mut().write_gpr(6, DRAM_BASE + 2);
-        machine.cpu_mut().write_gpr(5, 7);
+    fn compressed_instruction_advances_pc_by_two() {
+        let mut machine = machine();
+        machine
+            .bus_mut()
+            .write_u16(DRAM_BASE, COMPRESSED_ADD_X5_ONE)
+            .unwrap();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+
+        machine.step(StepOptions::default());
+
+        assert_eq!(machine.cpu().read_gpr(TEST_REGISTER_X5), 1);
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + MIN_INSTRUCTION_BYTES);
+    }
+
+    #[test]
+    fn standard_instruction_can_follow_a_compressed_instruction() {
+        let mut machine = machine();
+        machine
+            .bus_mut()
+            .write_u16(DRAM_BASE, COMPRESSED_ADDI_X5_ONE)
+            .unwrap();
+        machine
+            .bus_mut()
+            .write_u32(DRAM_BASE + MIN_INSTRUCTION_BYTES, STANDARD_ADDI_X5_X0_THREE)
+            .unwrap();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+
+        machine.step(StepOptions::default());
+        machine.step(StepOptions::default());
+
+        assert_eq!(machine.cpu().read_gpr(TEST_REGISTER_X5), 3);
+        assert_eq!(
+            machine.cpu().pc(),
+            DRAM_BASE + MIN_INSTRUCTION_BYTES + STANDARD_INSTRUCTION_BYTES
+        );
+    }
+
+    #[test]
+    fn compressed_jump_to_itself_runs_to_the_step_limit() {
+        let mut machine = machine();
+        machine
+            .bus_mut()
+            .write_u16(DRAM_BASE, COMPRESSED_J_SELF)
+            .unwrap();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+
+        assert_eq!(machine.run(3), RunOutcome::StepLimitReached);
+        assert!(!machine.halted());
+        assert_eq!(machine.cpu().pc(), DRAM_BASE);
+    }
+
+    #[test]
+    fn jalr_clears_bit_zero_so_every_target_is_aligned() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(6, DRAM_BASE + 3);
 
         machine.execute(Instruction::Jalr {
-            rd: 5,
+            rd: RA,
             rs1: 6,
             offset: 0,
         });
 
-        assert_eq!(machine.cpu().read_gpr(5), 7, "rd must not change");
-        assert_trap(&machine, inst::CAUSE_MISALIGNED_FETCH, DRAM_BASE + 2, 0);
+        assert_eq!(machine.cpu().read_gpr(usize::from(RA)), 4);
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + MIN_INSTRUCTION_BYTES);
     }
 
     #[test]
@@ -1595,10 +1678,10 @@ mod tests {
         let mut machine = trapped_machine();
         machine.cpu_mut().write_gpr(5, 7);
 
-        machine.execute(Instruction::Jal { rd: 5, offset: 2 });
+        machine.execute(Instruction::Jal { rd: 5, offset: 3 });
 
         assert_eq!(machine.cpu().read_gpr(5), 7, "rd must not change");
-        assert_trap(&machine, inst::CAUSE_MISALIGNED_FETCH, 2, 0);
+        assert_trap(&machine, inst::CAUSE_MISALIGNED_FETCH, 3, 0);
     }
 
     #[test]
@@ -1770,10 +1853,10 @@ mod tests {
         machine.execute(Instruction::Bne {
             rs1: 5,
             rs2: 6,
-            offset: 2,
+            offset: 3,
         });
 
-        assert_trap(&machine, inst::CAUSE_MISALIGNED_FETCH, 2, 0);
+        assert_trap(&machine, inst::CAUSE_MISALIGNED_FETCH, 3, 0);
     }
 
     #[test]
@@ -1975,7 +2058,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64ima_and_ignores_warl_writes() {
+    fn misa_reports_rv64imac_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -2071,7 +2154,7 @@ mod tests {
         machine.cpu_mut().set_pc(DRAM_BASE);
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE, inst::MATCH_CSRRCI ^ 1)
+            .write_u32(DRAM_BASE, inst::MATCH_SRET)
             .unwrap();
 
         machine.step(StepOptions::default());
@@ -2079,8 +2162,46 @@ mod tests {
         assert_trap(
             &machine,
             inst::CAUSE_ILLEGAL_INSTRUCTION,
-            u64::from(inst::MATCH_CSRRCI ^ 1),
+            u64::from(inst::MATCH_SRET),
             DRAM_BASE,
+        );
+    }
+
+    #[test]
+    fn illegal_compressed_instruction_reports_its_zero_extended_bits() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().set_pc(DRAM_BASE + MIN_INSTRUCTION_BYTES);
+        machine
+            .bus_mut()
+            .write_u16(DRAM_BASE + MIN_INSTRUCTION_BYTES, ILLEGAL_COMPRESSED_ZERO)
+            .unwrap();
+
+        machine.step(StepOptions::default());
+
+        assert_trap(
+            &machine,
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(ILLEGAL_COMPRESSED_ZERO),
+            DRAM_BASE + MIN_INSTRUCTION_BYTES,
+        );
+    }
+
+    #[test]
+    fn compressed_ebreak_reports_its_instruction_address() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().set_pc(DRAM_BASE + MIN_INSTRUCTION_BYTES);
+        machine
+            .bus_mut()
+            .write_u16(DRAM_BASE + MIN_INSTRUCTION_BYTES, COMPRESSED_EBREAK)
+            .unwrap();
+
+        machine.step(StepOptions::default());
+
+        assert_trap(
+            &machine,
+            inst::CAUSE_BREAKPOINT,
+            DRAM_BASE + MIN_INSTRUCTION_BYTES,
+            DRAM_BASE + MIN_INSTRUCTION_BYTES,
         );
     }
 
@@ -2108,14 +2229,14 @@ mod tests {
     #[test]
     fn misaligned_fetch_uses_the_instruction_address_cause() {
         let mut machine = trapped_machine();
-        machine.cpu_mut().set_pc(DRAM_BASE + 2);
+        machine.cpu_mut().set_pc(DRAM_BASE + 1);
 
         machine.step(StepOptions::default());
 
         assert_trap(
             &machine,
             inst::CAUSE_MISALIGNED_FETCH,
-            DRAM_BASE + 2,
+            DRAM_BASE + 1,
             DRAM_BASE,
         );
     }

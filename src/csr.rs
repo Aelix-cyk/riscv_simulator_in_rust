@@ -2,8 +2,9 @@
 
 use crate::inst;
 
-const INSTRUCTION_BYTES: u64 = 4;
-const INSTRUCTION_ALIGNMENT_MASK: u64 = !(INSTRUCTION_BYTES - 1);
+const MEDIUM_INSTRUCTION_BYTES: u64 = 4;
+const MTVEC_ALIGNMENT_MASK: u64 = !(MEDIUM_INSTRUCTION_BYTES - 1);
+const MEPC_ALIGNMENT_MASK: u64 = !1;
 const MSTATUS_MIE: u64 = 1 << 3;
 const MSTATUS_MPIE: u64 = 1 << 7;
 const MSTATUS_MPP_MASK: u64 = 0b11 << 11;
@@ -12,10 +13,12 @@ const MACHINE_MODE: u64 = 0b11;
 const MXL_SHIFT: u32 = 62;
 const MXL_64: u64 = 2;
 const MISA_EXT_A_SHIFT: u32 = 0;
+const MISA_EXT_C_SHIFT: u32 = 2;
 const MISA_EXT_I_SHIFT: u32 = 8;
 const MISA_EXT_M_SHIFT: u32 = 12;
 const MISA_VALUE: u64 = (MXL_64 << MXL_SHIFT)
     | (1 << MISA_EXT_A_SHIFT)
+    | (1 << MISA_EXT_C_SHIFT)
     | (1 << MISA_EXT_I_SHIFT)
     | (1 << MISA_EXT_M_SHIFT);
 
@@ -66,9 +69,9 @@ impl Csrs {
             // MXL and the implemented extension bits are fixed, so WARL writes
             // are accepted and ignored.
             inst::CSR_MISA => {}
-            inst::CSR_MTVEC => self.mtvec = value & INSTRUCTION_ALIGNMENT_MASK,
+            inst::CSR_MTVEC => self.mtvec = value & MTVEC_ALIGNMENT_MASK,
             inst::CSR_MSCRATCH => self.mscratch = value,
-            inst::CSR_MEPC => self.mepc = value & INSTRUCTION_ALIGNMENT_MASK,
+            inst::CSR_MEPC => self.mepc = value & MEPC_ALIGNMENT_MASK,
             inst::CSR_MCAUSE => self.mcause = value,
             inst::CSR_MTVAL => self.mtval = value,
             inst::CSR_MIE => self.mie = value,
@@ -94,7 +97,7 @@ impl Csrs {
         self.mstatus &= !MSTATUS_MIE;
         self.mstatus = (self.mstatus & !MSTATUS_MPP_MASK) | (MACHINE_MODE << 11);
 
-        self.mepc = epc & INSTRUCTION_ALIGNMENT_MASK;
+        self.mepc = epc & MEPC_ALIGNMENT_MASK;
         self.mcause = cause;
         self.mtval = tval;
     }
@@ -113,7 +116,7 @@ impl Csrs {
 
     /// Address entered by a synchronous trap.
     pub(crate) fn trap_vector(self) -> u64 {
-        self.mtvec & INSTRUCTION_ALIGNMENT_MASK
+        self.mtvec & MTVEC_ALIGNMENT_MASK
     }
 
     /// PC saved by the most recent trap.
@@ -145,8 +148,8 @@ mod tests {
         assert!(csrs.write(inst::CSR_SATP, u64::MAX));
 
         assert_eq!(csrs.read(inst::CSR_MSTATUS), Some(MSTATUS_WRITABLE));
-        assert_eq!(csrs.read(inst::CSR_MTVEC), Some(INSTRUCTION_ALIGNMENT_MASK));
-        assert_eq!(csrs.read(inst::CSR_MEPC), Some(INSTRUCTION_ALIGNMENT_MASK));
+        assert_eq!(csrs.read(inst::CSR_MTVEC), Some(MTVEC_ALIGNMENT_MASK));
+        assert_eq!(csrs.read(inst::CSR_MEPC), Some(MEPC_ALIGNMENT_MASK));
         assert_eq!(csrs.read(inst::CSR_MSCRATCH), Some(u64::MAX));
         assert_eq!(csrs.read(inst::CSR_MCAUSE), Some(u64::MAX));
         assert_eq!(csrs.read(inst::CSR_MTVAL), Some(u64::MAX));
@@ -168,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_is_a_fixed_rv64ima_warl() {
+    fn misa_is_a_fixed_rv64imac_warl() {
         let mut csrs = Csrs::default();
 
         assert_eq!(csrs.read(inst::CSR_MISA), Some(MISA_VALUE));
