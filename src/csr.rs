@@ -11,9 +11,13 @@ const MSTATUS_WRITABLE: u64 = MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP_MASK;
 const MACHINE_MODE: u64 = 0b11;
 const MXL_SHIFT: u32 = 62;
 const MXL_64: u64 = 2;
+const MISA_EXT_A_SHIFT: u32 = 0;
 const MISA_EXT_I_SHIFT: u32 = 8;
 const MISA_EXT_M_SHIFT: u32 = 12;
-const MISA_VALUE: u64 = (MXL_64 << MXL_SHIFT) | (1 << MISA_EXT_I_SHIFT) | (1 << MISA_EXT_M_SHIFT);
+const MISA_VALUE: u64 = (MXL_64 << MXL_SHIFT)
+    | (1 << MISA_EXT_A_SHIFT)
+    | (1 << MISA_EXT_I_SHIFT)
+    | (1 << MISA_EXT_M_SHIFT);
 
 /// Architectural machine-mode CSR state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -128,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_is_a_fixed_rv64im_warl() {
+    fn misa_is_a_fixed_rv64ima_warl() {
         let mut csrs = Csrs::default();
 
         assert_eq!(csrs.read(inst::CSR_MISA), Some(MISA_VALUE));

@@ -9,9 +9,9 @@ use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 use riscv_simulator_in_rust::trap::Trap;
 
 /// Fixtures whose instruction stream the decoder is checked against.
-const FIXTURES: [&str; 11] = [
+const FIXTURES: [&str; 13] = [
     "loop.S", "edges.S", "fields.S", "alu.S", "upper.S", "branch.S", "memory.S", "fence.S",
-    "trap.S", "mul.S", "div.S",
+    "trap.S", "mul.S", "div.S", "lrsc.S", "amo.S",
 ];
 
 /// Legal mnemonics that this milestone does not decode yet.

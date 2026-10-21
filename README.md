@@ -4,15 +4,14 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 
 ## Status
 
-A 64-bit hart that executes RV64IM plus Zicsr — the integer ALU operations, all
-integer multiply/divide instructions, branches, jumps, loads and stores,
+A 64-bit hart that executes RV64IMA plus Zicsr — the integer ALU operations, all
+integer multiply/divide and atomic instructions, branches, jumps, loads and stores,
 `fence`/`fence.i`, and the six CSR read/modify/write forms. Synchronous exceptions,
 including `ecall` and `ebreak`, enter a machine-mode handler through `mtvec`.
-Implemented CSRs include WARL `misa` (RV64IM), `mstatus`, `mtvec`, `mscratch`,
+Implemented CSRs include WARL `misa` (RV64IMA), `mstatus`, `mtvec`, `mscratch`,
 `mepc`, `mcause`, and `mtval`. The target profile is RVA22S64, built up
 progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
-requirements and the choices the specification leaves open, and `docs/notes/` for
-working notes.
+requirements and the choices the specification leaves open.
 
 ## Usage
 
@@ -35,7 +34,7 @@ its loadable bytes. Fixtures use `tests/fixtures/link.ld`, which places the imag
 `DRAM_BASE` with no leading gap:
 
 ```sh
-$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64im_zifencei_zicsr -mabi=lp64 -nostdlib \
+$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64ima_zifencei_zicsr -mabi=lp64 -nostdlib \
     -I tests/fixtures -Wl,-T,tests/fixtures/link.ld \
     -o /tmp/loop.elf tests/fixtures/loop.S
 $RISCV/bin/riscv64-unknown-elf-objcopy -O binary /tmp/loop.elf /tmp/loop.bin
@@ -55,3 +54,8 @@ Fixtures live in `tests/fixtures/`; `tests/support/assemble.rs` assembles them a
 run time with the local toolchain and queries `spike` for the expected architectural
 state — all 32 registers and the loaded memory — so no binaries are committed. The
 decoder and trace text are additionally checked line by line against `objdump`.
+
+## Development tooling
+
+- CLI agent: `codex`
+- Model: `deepseek-flash`

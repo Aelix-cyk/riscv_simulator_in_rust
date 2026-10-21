@@ -1,5 +1,7 @@
 //! Instruction decoding.
 
+use std::borrow::Cow;
+
 use crate::cpu::abi_name;
 use crate::inst;
 use crate::opcodes;
@@ -102,6 +104,174 @@ pub enum Instruction {
     /// `remuw rd, rs1, rs2`
     Remuw { rd: u8, rs1: u8, rs2: u8 },
 
+    // A-extension load-reserved/store-conditional.
+    /// `lr.w rd, (rs1)`
+    LrW { rd: u8, rs1: u8, aq: bool, rl: bool },
+    /// `lr.d rd, (rs1)`
+    LrD { rd: u8, rs1: u8, aq: bool, rl: bool },
+    /// `sc.w rd, rs2, (rs1)`
+    ScW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `sc.d rd, rs2, (rs1)`
+    ScD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+
+    // A-extension atomic memory operations.
+    /// `amoswap.w rd, rs2, (rs1)`
+    AmoSwapW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoadd.w rd, rs2, (rs1)`
+    AmoAddW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoxor.w rd, rs2, (rs1)`
+    AmoXorW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoor.w rd, rs2, (rs1)`
+    AmoOrW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoand.w rd, rs2, (rs1)`
+    AmoAndW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amomin.w rd, rs2, (rs1)`
+    AmoMinW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amomax.w rd, rs2, (rs1)`
+    AmoMaxW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amominu.w rd, rs2, (rs1)`
+    AmoMinuW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amomaxu.w rd, rs2, (rs1)`
+    AmoMaxuW {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoswap.d rd, rs2, (rs1)`
+    AmoSwapD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoadd.d rd, rs2, (rs1)`
+    AmoAddD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoxor.d rd, rs2, (rs1)`
+    AmoXorD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoor.d rd, rs2, (rs1)`
+    AmoOrD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amoand.d rd, rs2, (rs1)`
+    AmoAndD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amomin.d rd, rs2, (rs1)`
+    AmoMinD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amomax.d rd, rs2, (rs1)`
+    AmoMaxD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amominu.d rd, rs2, (rs1)`
+    AmoMinuD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+    /// `amomaxu.d rd, rs2, (rs1)`
+    AmoMaxuD {
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        aq: bool,
+        rl: bool,
+    },
+
     // Loads.
     /// `lb rd, offset(rs1)`
     Lb { rd: u8, rs1: u8, offset: i64 },
@@ -181,7 +351,43 @@ pub enum Instruction {
 
 impl Instruction {
     /// Mnemonic spelled the way `objdump -M no-aliases` spells it.
-    pub fn mnemonic(&self) -> &'static str {
+    pub fn mnemonic(&self) -> Cow<'static, str> {
+        let base = self.base_mnemonic();
+        match self.atomic_ordering() {
+            Some((aq, rl)) => Cow::Owned(format!("{base}{}", atomic_suffix(aq, rl))),
+            None => Cow::Borrowed(base),
+        }
+    }
+
+    fn atomic_ordering(&self) -> Option<(bool, bool)> {
+        match *self {
+            Instruction::LrW { aq, rl, .. }
+            | Instruction::LrD { aq, rl, .. }
+            | Instruction::ScW { aq, rl, .. }
+            | Instruction::ScD { aq, rl, .. }
+            | Instruction::AmoSwapW { aq, rl, .. }
+            | Instruction::AmoAddW { aq, rl, .. }
+            | Instruction::AmoXorW { aq, rl, .. }
+            | Instruction::AmoOrW { aq, rl, .. }
+            | Instruction::AmoAndW { aq, rl, .. }
+            | Instruction::AmoMinW { aq, rl, .. }
+            | Instruction::AmoMaxW { aq, rl, .. }
+            | Instruction::AmoMinuW { aq, rl, .. }
+            | Instruction::AmoMaxuW { aq, rl, .. }
+            | Instruction::AmoSwapD { aq, rl, .. }
+            | Instruction::AmoAddD { aq, rl, .. }
+            | Instruction::AmoXorD { aq, rl, .. }
+            | Instruction::AmoOrD { aq, rl, .. }
+            | Instruction::AmoAndD { aq, rl, .. }
+            | Instruction::AmoMinD { aq, rl, .. }
+            | Instruction::AmoMaxD { aq, rl, .. }
+            | Instruction::AmoMinuD { aq, rl, .. }
+            | Instruction::AmoMaxuD { aq, rl, .. } => Some((aq, rl)),
+            _ => None,
+        }
+    }
+
+    fn base_mnemonic(&self) -> &'static str {
         match *self {
             Instruction::Addi { .. } => "addi",
             Instruction::Slti { .. } => "slti",
@@ -224,6 +430,28 @@ impl Instruction {
             Instruction::Divuw { .. } => "divuw",
             Instruction::Remw { .. } => "remw",
             Instruction::Remuw { .. } => "remuw",
+            Instruction::LrW { .. } => "lr.w",
+            Instruction::LrD { .. } => "lr.d",
+            Instruction::ScW { .. } => "sc.w",
+            Instruction::ScD { .. } => "sc.d",
+            Instruction::AmoSwapW { .. } => "amoswap.w",
+            Instruction::AmoAddW { .. } => "amoadd.w",
+            Instruction::AmoXorW { .. } => "amoxor.w",
+            Instruction::AmoOrW { .. } => "amoor.w",
+            Instruction::AmoAndW { .. } => "amoand.w",
+            Instruction::AmoMinW { .. } => "amomin.w",
+            Instruction::AmoMaxW { .. } => "amomax.w",
+            Instruction::AmoMinuW { .. } => "amominu.w",
+            Instruction::AmoMaxuW { .. } => "amomaxu.w",
+            Instruction::AmoSwapD { .. } => "amoswap.d",
+            Instruction::AmoAddD { .. } => "amoadd.d",
+            Instruction::AmoXorD { .. } => "amoxor.d",
+            Instruction::AmoOrD { .. } => "amoor.d",
+            Instruction::AmoAndD { .. } => "amoand.d",
+            Instruction::AmoMinD { .. } => "amomin.d",
+            Instruction::AmoMaxD { .. } => "amomax.d",
+            Instruction::AmoMinuD { .. } => "amominu.d",
+            Instruction::AmoMaxuD { .. } => "amomaxu.d",
             Instruction::Lb { .. } => "lb",
             Instruction::Lh { .. } => "lh",
             Instruction::Lw { .. } => "lw",
@@ -304,6 +532,174 @@ impl Instruction {
             Instruction::Divuw { rd, rs1, rs2 } => reg_op("divuw", rd, rs1, rs2),
             Instruction::Remw { rd, rs1, rs2 } => reg_op("remw", rd, rs1, rs2),
             Instruction::Remuw { rd, rs1, rs2 } => reg_op("remuw", rd, rs1, rs2),
+            Instruction::LrW { rd, rs1, aq, rl } => {
+                format!(
+                    "lr.w{} {},({})",
+                    atomic_suffix(aq, rl),
+                    abi_name(rd),
+                    abi_name(rs1)
+                )
+            }
+            Instruction::LrD { rd, rs1, aq, rl } => {
+                format!(
+                    "lr.d{} {},({})",
+                    atomic_suffix(aq, rl),
+                    abi_name(rd),
+                    abi_name(rs1)
+                )
+            }
+            Instruction::ScW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => format!(
+                "sc.w{} {},{},({})",
+                atomic_suffix(aq, rl),
+                abi_name(rd),
+                abi_name(rs2),
+                abi_name(rs1)
+            ),
+            Instruction::ScD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => format!(
+                "sc.d{} {},{},({})",
+                atomic_suffix(aq, rl),
+                abi_name(rd),
+                abi_name(rs2),
+                abi_name(rs1)
+            ),
+            Instruction::AmoSwapW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoswap.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoAddW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoadd.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoXorW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoxor.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoOrW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoor.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoAndW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoand.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMinW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amomin.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMaxW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amomax.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMinuW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amominu.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMaxuW {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amomaxu.w", rd, rs1, rs2, aq, rl),
+            Instruction::AmoSwapD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoswap.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoAddD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoadd.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoXorD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoxor.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoOrD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoor.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoAndD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amoand.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMinD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amomin.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMaxD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amomax.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMinuD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amominu.d", rd, rs1, rs2, aq, rl),
+            Instruction::AmoMaxuD {
+                rd,
+                rs1,
+                rs2,
+                aq,
+                rl,
+            } => amo_op("amomaxu.d", rd, rs1, rs2, aq, rl),
             Instruction::Lb { rd, rs1, offset } => load_op("lb", rd, rs1, offset),
             Instruction::Lh { rd, rs1, offset } => load_op("lh", rd, rs1, offset),
             Instruction::Lw { rd, rs1, offset } => load_op("lw", rd, rs1, offset),
@@ -403,6 +799,27 @@ fn csr_imm_op(mnemonic: &str, rd: u8, csr: u16, zimm: u8) -> String {
     format!("{mnemonic} {},{},{zimm}", abi_name(rd), csr_name(csr))
 }
 
+/// Ordering suffix used by `objdump -M no-aliases`.
+fn atomic_suffix(aq: bool, rl: bool) -> &'static str {
+    match (aq, rl) {
+        (false, false) => "",
+        (true, false) => ".aq",
+        (false, true) => ".rl",
+        (true, true) => ".aqrl",
+    }
+}
+
+/// `mnemonic rd,rs2,(rs1)` with optional AQ/RL suffix.
+fn amo_op(mnemonic: &str, rd: u8, rs1: u8, rs2: u8, aq: bool, rl: bool) -> String {
+    format!(
+        "{mnemonic}{} {},{},({})",
+        atomic_suffix(aq, rl),
+        abi_name(rd),
+        abi_name(rs2),
+        abi_name(rs1)
+    )
+}
+
 /// Spell the CSRs implemented by this milestone as `objdump` does.
 fn csr_name(csr: u16) -> String {
     match csr {
@@ -487,6 +904,16 @@ impl Word {
     /// Second source register, bits 24:20.
     pub(crate) fn rs2(self) -> u8 {
         self.bits(20, 5) as u8
+    }
+
+    /// Acquire-ordering bit, bit 26.
+    pub(crate) fn aq(self) -> bool {
+        self.bits(26, 1) != 0
+    }
+
+    /// Release-ordering bit, bit 25.
+    pub(crate) fn rl(self) -> bool {
+        self.bits(25, 1) != 0
     }
 
     /// CSR address, bits 31:20.

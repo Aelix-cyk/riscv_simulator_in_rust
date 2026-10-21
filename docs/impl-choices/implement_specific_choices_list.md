@@ -17,7 +17,7 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Reset value of GPRs and CSRs | All zero | Decided |
 | IALIGN | 32; C is mandatory in the profile, so 16-bit alignment never appears | Decided |
 | Behaviour on a misaligned instruction address | Raise an exception, currently `Trap::InstructionAddressMisaligned` | Decided |
-| `misa` | WARL RV64IM: `MXL = 2`, with I and M fixed; writes are accepted and ignored | Decided |
+| `misa` | WARL RV64IMA: `MXL = 2`, with A, I, and M fixed; writes are accepted and ignored | Decided |
 | `mvendorid`, `marchid`, `mimpid` | Not implemented | Open |
 | Physical address width | Registers are 64-bit; the implemented physical space is the single DRAM region below | Decided |
 

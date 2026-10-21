@@ -80,6 +80,29 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_DIVUW, inst::MASK_DIVUW, divuw),
     row(inst::MATCH_REMW, inst::MASK_REMW, remw),
     row(inst::MATCH_REMUW, inst::MASK_REMUW, remuw),
+    // A-extension load-reserved/store-conditional.
+    row(inst::MATCH_LR_W, inst::MASK_LR_W, lr_w),
+    row(inst::MATCH_LR_D, inst::MASK_LR_D, lr_d),
+    row(inst::MATCH_SC_W, inst::MASK_SC_W, sc_w),
+    row(inst::MATCH_SC_D, inst::MASK_SC_D, sc_d),
+    row(inst::MATCH_AMOSWAP_W, inst::MASK_AMOSWAP_W, amoswap_w),
+    row(inst::MATCH_AMOADD_W, inst::MASK_AMOADD_W, amoadd_w),
+    row(inst::MATCH_AMOXOR_W, inst::MASK_AMOXOR_W, amoxor_w),
+    row(inst::MATCH_AMOOR_W, inst::MASK_AMOOR_W, amoor_w),
+    row(inst::MATCH_AMOAND_W, inst::MASK_AMOAND_W, amoand_w),
+    row(inst::MATCH_AMOMIN_W, inst::MASK_AMOMIN_W, amomin_w),
+    row(inst::MATCH_AMOMAX_W, inst::MASK_AMOMAX_W, amomax_w),
+    row(inst::MATCH_AMOMINU_W, inst::MASK_AMOMINU_W, amominu_w),
+    row(inst::MATCH_AMOMAXU_W, inst::MASK_AMOMAXU_W, amomaxu_w),
+    row(inst::MATCH_AMOSWAP_D, inst::MASK_AMOSWAP_D, amoswap_d),
+    row(inst::MATCH_AMOADD_D, inst::MASK_AMOADD_D, amoadd_d),
+    row(inst::MATCH_AMOXOR_D, inst::MASK_AMOXOR_D, amoxor_d),
+    row(inst::MATCH_AMOOR_D, inst::MASK_AMOOR_D, amoor_d),
+    row(inst::MATCH_AMOAND_D, inst::MASK_AMOAND_D, amoand_d),
+    row(inst::MATCH_AMOMIN_D, inst::MASK_AMOMIN_D, amomin_d),
+    row(inst::MATCH_AMOMAX_D, inst::MASK_AMOMAX_D, amomax_d),
+    row(inst::MATCH_AMOMINU_D, inst::MASK_AMOMINU_D, amominu_d),
+    row(inst::MATCH_AMOMAXU_D, inst::MASK_AMOMAXU_D, amomaxu_d),
     // Control transfers.
     row(inst::MATCH_LUI, inst::MASK_LUI, lui),
     row(inst::MATCH_AUIPC, inst::MASK_AUIPC, auipc),
@@ -453,6 +476,77 @@ fn remuw(word: Word) -> Instruction {
     }
 }
 
+fn lr_w(word: Word) -> Instruction {
+    Instruction::LrW {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        aq: word.aq(),
+        rl: word.rl(),
+    }
+}
+
+fn lr_d(word: Word) -> Instruction {
+    Instruction::LrD {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        aq: word.aq(),
+        rl: word.rl(),
+    }
+}
+
+fn sc_w(word: Word) -> Instruction {
+    Instruction::ScW {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+        aq: word.aq(),
+        rl: word.rl(),
+    }
+}
+
+fn sc_d(word: Word) -> Instruction {
+    Instruction::ScD {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+        aq: word.aq(),
+        rl: word.rl(),
+    }
+}
+
+macro_rules! amo_builder {
+    ($name:ident, $variant:ident) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::$variant {
+                rd: word.rd(),
+                rs1: word.rs1(),
+                rs2: word.rs2(),
+                aq: word.aq(),
+                rl: word.rl(),
+            }
+        }
+    };
+}
+
+amo_builder!(amoswap_w, AmoSwapW);
+amo_builder!(amoadd_w, AmoAddW);
+amo_builder!(amoxor_w, AmoXorW);
+amo_builder!(amoor_w, AmoOrW);
+amo_builder!(amoand_w, AmoAndW);
+amo_builder!(amomin_w, AmoMinW);
+amo_builder!(amomax_w, AmoMaxW);
+amo_builder!(amominu_w, AmoMinuW);
+amo_builder!(amomaxu_w, AmoMaxuW);
+amo_builder!(amoswap_d, AmoSwapD);
+amo_builder!(amoadd_d, AmoAddD);
+amo_builder!(amoxor_d, AmoXorD);
+amo_builder!(amoor_d, AmoOrD);
+amo_builder!(amoand_d, AmoAndD);
+amo_builder!(amomin_d, AmoMinD);
+amo_builder!(amomax_d, AmoMaxD);
+amo_builder!(amominu_d, AmoMinuD);
+amo_builder!(amomaxu_d, AmoMaxuD);
+
 fn beq(word: Word) -> Instruction {
     Instruction::Beq {
         rs1: word.rs1(),
@@ -729,7 +823,7 @@ mod tests {
     #[test]
     fn unimplemented_instructions_do_not_decode() {
         // Legal encodings that later milestones will implement.
-        for code in [inst::MATCH_AMOADD_W, inst::MATCH_SRET] {
+        for code in [inst::MATCH_AMOCAS_D, inst::MATCH_SRET] {
             assert_eq!(decode(code), Err(Trap::IllegalInstruction), "{code:#010x}");
         }
     }

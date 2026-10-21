@@ -8,6 +8,8 @@ use crate::trap::Trap;
 
 /// Width of a 32-bit instruction; the C extension will add a 16-bit case.
 const INSTRUCTION_BYTES: u64 = 4;
+const RESERVATION_BYTES: u64 = 8;
+const RESERVATION_ALIGNMENT_MASK: u64 = !(RESERVATION_BYTES - 1);
 
 /// A synchronous exception ready for architectural trap delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +22,20 @@ impl Exception {
     fn new(cause: u8, tval: u64) -> Self {
         Self { cause, tval }
     }
+}
+
+/// Arithmetic performed by an atomic memory operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AmoOperation {
+    Swap,
+    Add,
+    Xor,
+    Or,
+    And,
+    Min,
+    Max,
+    Minu,
+    Maxu,
 }
 
 /// Why [`Machine::run`] returned.
@@ -48,6 +64,7 @@ pub struct Machine<B: Bus> {
     cpu: Cpu,
     bus: B,
     halted: bool,
+    reservation: Option<u64>,
 }
 
 impl<B: Bus> Machine<B> {
@@ -62,6 +79,7 @@ impl<B: Bus> Machine<B> {
             cpu,
             bus,
             halted: false,
+            reservation: None,
         }
     }
 
@@ -358,6 +376,108 @@ impl<B: Bus> Machine<B> {
                 let value = dividend.checked_rem(divisor).unwrap_or(dividend);
                 self.write(rd, sign_extend_32(u64::from(value)));
             }
+            Instruction::LrW { rd, rs1, .. } => {
+                let address = self.gpr(rs1);
+                Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_LOAD)?;
+                let value = self
+                    .bus
+                    .read_u32(address)
+                    .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+                self.reservation = Some(Self::reservation_set(address));
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::LrD { rd, rs1, .. } => {
+                let address = self.gpr(rs1);
+                Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_LOAD)?;
+                let value = self
+                    .bus
+                    .read_u64(address)
+                    .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+                self.reservation = Some(Self::reservation_set(address));
+                self.write(rd, value);
+            }
+            Instruction::ScW { rd, rs1, rs2, .. } => {
+                let address = self.gpr(rs1);
+                let source = self.gpr(rs2);
+                Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_STORE)?;
+                let success = self.reservation.take() == Some(Self::reservation_set(address));
+                if success {
+                    self.bus
+                        .write_u32(address, source as u32)
+                        .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                    self.write(rd, 0);
+                } else {
+                    self.write(rd, 1);
+                }
+            }
+            Instruction::ScD { rd, rs1, rs2, .. } => {
+                let address = self.gpr(rs1);
+                let source = self.gpr(rs2);
+                Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_STORE)?;
+                let success = self.reservation.take() == Some(Self::reservation_set(address));
+                if success {
+                    self.bus
+                        .write_u64(address, source)
+                        .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                    self.write(rd, 0);
+                } else {
+                    self.write(rd, 1);
+                }
+            }
+            Instruction::AmoSwapW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Swap)?;
+            }
+            Instruction::AmoAddW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Add)?;
+            }
+            Instruction::AmoXorW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Xor)?;
+            }
+            Instruction::AmoOrW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Or)?;
+            }
+            Instruction::AmoAndW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::And)?;
+            }
+            Instruction::AmoMinW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Min)?;
+            }
+            Instruction::AmoMaxW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Max)?;
+            }
+            Instruction::AmoMinuW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Minu)?;
+            }
+            Instruction::AmoMaxuW { rd, rs1, rs2, .. } => {
+                self.execute_amo_w(rd, rs1, rs2, AmoOperation::Maxu)?;
+            }
+            Instruction::AmoSwapD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Swap)?;
+            }
+            Instruction::AmoAddD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Add)?;
+            }
+            Instruction::AmoXorD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Xor)?;
+            }
+            Instruction::AmoOrD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Or)?;
+            }
+            Instruction::AmoAndD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::And)?;
+            }
+            Instruction::AmoMinD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Min)?;
+            }
+            Instruction::AmoMaxD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Max)?;
+            }
+            Instruction::AmoMinuD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Minu)?;
+            }
+            Instruction::AmoMaxuD { rd, rs1, rs2, .. } => {
+                self.execute_amo_d(rd, rs1, rs2, AmoOperation::Maxu)?;
+            }
             Instruction::Lb { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
@@ -425,24 +545,28 @@ impl<B: Bus> Machine<B> {
                 self.bus
                     .write_u8(address, self.gpr(rs2) as u8)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                self.invalidate_reservation(address, 1);
             }
             Instruction::Sh { rs2, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 self.bus
                     .write_u16(address, self.gpr(rs2) as u16)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                self.invalidate_reservation(address, 2);
             }
             Instruction::Sw { rs2, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 self.bus
                     .write_u32(address, self.gpr(rs2) as u32)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                self.invalidate_reservation(address, 4);
             }
             Instruction::Sd { rs2, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 self.bus
                     .write_u64(address, self.gpr(rs2))
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                self.invalidate_reservation(address, 8);
             }
             // Ordering operations have no effect on one hart with no cache model:
             // the shared PC update below retires them.
@@ -582,6 +706,77 @@ impl<B: Bus> Machine<B> {
         }
     }
 
+    /// Checks a naturally aligned atomic operand.
+    fn check_atomic_alignment(address: u64, width: u64, cause: u8) -> Result<(), Exception> {
+        if address.is_multiple_of(width) {
+            Ok(())
+        } else {
+            Err(Exception::new(cause, address))
+        }
+    }
+
+    /// Returns the naturally aligned 8-byte reservation-set address.
+    fn reservation_set(address: u64) -> u64 {
+        address & RESERVATION_ALIGNMENT_MASK
+    }
+
+    /// Clears a reservation touched by a successful ordinary write.
+    fn invalidate_reservation(&mut self, address: u64, width: u64) {
+        let first = Self::reservation_set(address);
+        let last = Self::reservation_set(address.saturating_add(width - 1));
+        if self.reservation == Some(first) || self.reservation == Some(last) {
+            self.reservation = None;
+        }
+    }
+
+    /// Executes an RV64A word-sized atomic memory operation.
+    fn execute_amo_w(
+        &mut self,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        operation: AmoOperation,
+    ) -> Result<(), Exception> {
+        let address = self.gpr(rs1);
+        let source = self.gpr(rs2) as u32;
+        Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_STORE)?;
+        let old = self
+            .bus
+            .read_u32(address)
+            .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+        let new = apply_amo_w(old, source, operation);
+        self.bus
+            .write_u32(address, new)
+            .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+        self.invalidate_reservation(address, 4);
+        self.write(rd, sign_extend_32(u64::from(old)));
+        Ok(())
+    }
+
+    /// Executes an RV64A doubleword-sized atomic memory operation.
+    fn execute_amo_d(
+        &mut self,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        operation: AmoOperation,
+    ) -> Result<(), Exception> {
+        let address = self.gpr(rs1);
+        let source = self.gpr(rs2);
+        Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_STORE)?;
+        let old = self
+            .bus
+            .read_u64(address)
+            .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+        let new = apply_amo_d(old, source, operation);
+        self.bus
+            .write_u64(address, new)
+            .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+        self.invalidate_reservation(address, 8);
+        self.write(rd, old);
+        Ok(())
+    }
+
     /// Checks that a control-transfer target is four-byte aligned.
     fn checked_target(target: u64) -> Result<u64, Exception> {
         if !target.is_multiple_of(INSTRUCTION_BYTES) {
@@ -618,6 +813,36 @@ fn instruction_word(instruction: Instruction) -> u32 {
         | (u32::from(rd) << RD_SHIFT)
 }
 
+/// Computes the new value for an AMO word operation.
+fn apply_amo_w(old: u32, source: u32, operation: AmoOperation) -> u32 {
+    match operation {
+        AmoOperation::Swap => source,
+        AmoOperation::Add => old.wrapping_add(source),
+        AmoOperation::Xor => old ^ source,
+        AmoOperation::Or => old | source,
+        AmoOperation::And => old & source,
+        AmoOperation::Min => (old as i32).min(source as i32) as u32,
+        AmoOperation::Max => (old as i32).max(source as i32) as u32,
+        AmoOperation::Minu => old.min(source),
+        AmoOperation::Maxu => old.max(source),
+    }
+}
+
+/// Computes the new value for an AMO doubleword operation.
+fn apply_amo_d(old: u64, source: u64, operation: AmoOperation) -> u64 {
+    match operation {
+        AmoOperation::Swap => source,
+        AmoOperation::Add => old.wrapping_add(source),
+        AmoOperation::Xor => old ^ source,
+        AmoOperation::Or => old | source,
+        AmoOperation::And => old & source,
+        AmoOperation::Min => (old as i64).min(source as i64) as u64,
+        AmoOperation::Max => (old as i64).max(source as i64) as u64,
+        AmoOperation::Minu => old.min(source),
+        AmoOperation::Maxu => old.max(source),
+    }
+}
+
 /// Sign-extends the low 32 bits of `value` to 64 bits.
 fn sign_extend_32(value: u64) -> u64 {
     i64::from(value as u32 as i32) as u64
@@ -640,6 +865,18 @@ mod tests {
 
     const HANDLER: u64 = DRAM_BASE + 32;
 
+    struct WriteFaultBus(Memory);
+
+    impl Bus for WriteFaultBus {
+        fn read_u8(&mut self, address: u64) -> Result<u8, Trap> {
+            self.0.read_u8(address)
+        }
+
+        fn write_u8(&mut self, _address: u64, _value: u8) -> Result<(), Trap> {
+            Err(Trap::AccessFault)
+        }
+    }
+
     /// A hart on 64 bytes of memory, no program loaded.
     fn machine() -> Machine<Memory> {
         Machine::new(Memory::with_size(64))
@@ -652,7 +889,7 @@ mod tests {
         machine
     }
 
-    fn assert_trap(machine: &Machine<Memory>, cause: u8, tval: u64, epc: u64) {
+    fn assert_trap<B: Bus>(machine: &Machine<B>, cause: u8, tval: u64, epc: u64) {
         assert_eq!(
             machine.cpu().read_csr(inst::CSR_MCAUSE),
             Some(u64::from(cause)),
@@ -900,6 +1137,316 @@ mod tests {
         assert_eq!(machine.cpu().read_gpr(8), u64::MAX);
         assert_eq!(machine.cpu().read_gpr(9), 0xffff_ffff_8000_0000);
         assert_eq!(machine.cpu().read_gpr(10), 0xffff_ffff_8000_0000);
+    }
+
+    #[test]
+    fn lr_sc_success_updates_memory_and_clears_the_reservation() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+        machine.cpu_mut().write_gpr(8, 0x1122_3344_5566_7788);
+        machine
+            .bus_mut()
+            .write_u64(DRAM_BASE, 0x8877_6655_4433_2211)
+            .unwrap();
+
+        machine.execute(Instruction::LrD {
+            rd: 7,
+            rs1: 5,
+            aq: true,
+            rl: false,
+        });
+        assert_eq!(machine.cpu().read_gpr(7), 0x8877_6655_4433_2211);
+        assert_eq!(machine.reservation, Some(DRAM_BASE));
+
+        machine.execute(Instruction::ScD {
+            rd: 9,
+            rs1: 5,
+            rs2: 8,
+            aq: false,
+            rl: true,
+        });
+        assert_eq!(machine.cpu().read_gpr(9), 0);
+        assert_eq!(
+            machine.bus_mut().read_u64(DRAM_BASE).unwrap(),
+            0x1122_3344_5566_7788
+        );
+        assert_eq!(machine.reservation, None);
+    }
+
+    #[test]
+    fn sc_succeeds_anywhere_in_the_reserved_doubleword() {
+        let mut machine = machine();
+        machine
+            .bus_mut()
+            .write_u32(DRAM_BASE + 4, 0x1122_3344)
+            .unwrap();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE + 4);
+        machine.cpu_mut().write_gpr(6, DRAM_BASE);
+        machine.cpu_mut().write_gpr(7, 0x5566_7788);
+
+        machine.execute(Instruction::LrW {
+            rd: 8,
+            rs1: 5,
+            aq: false,
+            rl: false,
+        });
+        machine.execute(Instruction::ScW {
+            rd: 9,
+            rs1: 6,
+            rs2: 7,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(8), 0x1122_3344);
+        assert_eq!(machine.cpu().read_gpr(9), 0);
+        assert_eq!(machine.bus_mut().read_u32(DRAM_BASE).unwrap(), 0x5566_7788);
+    }
+
+    #[test]
+    fn sc_failure_preserves_memory_and_clears_the_reservation() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+        machine.cpu_mut().write_gpr(6, DRAM_BASE + 8);
+        machine.cpu_mut().write_gpr(7, 0xdead_beef);
+        machine
+            .bus_mut()
+            .write_u64(DRAM_BASE, 0x1122_3344_5566_7788)
+            .unwrap();
+
+        machine.execute(Instruction::LrD {
+            rd: 8,
+            rs1: 5,
+            aq: false,
+            rl: false,
+        });
+        machine.execute(Instruction::ScD {
+            rd: 9,
+            rs1: 6,
+            rs2: 7,
+            aq: false,
+            rl: false,
+        });
+        machine.execute(Instruction::ScD {
+            rd: 10,
+            rs1: 5,
+            rs2: 7,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(9), 1);
+        assert_eq!(machine.cpu().read_gpr(10), 1);
+        assert_eq!(
+            machine.bus_mut().read_u64(DRAM_BASE).unwrap(),
+            0x1122_3344_5566_7788
+        );
+    }
+
+    #[test]
+    fn ordinary_store_invalidates_the_reservation() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+        machine.cpu_mut().write_gpr(6, 0x1234_5678);
+        machine.execute(Instruction::LrD {
+            rd: 7,
+            rs1: 5,
+            aq: false,
+            rl: false,
+        });
+        machine.execute(Instruction::Sd {
+            rs2: 6,
+            rs1: 5,
+            offset: 0,
+        });
+        machine.execute(Instruction::ScD {
+            rd: 8,
+            rs1: 5,
+            rs2: 6,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(8), 1);
+    }
+
+    #[test]
+    fn misaligned_atomic_accesses_report_their_phase() {
+        let mut load = trapped_machine();
+        load.cpu_mut().set_pc(DRAM_BASE);
+        load.cpu_mut().write_gpr(5, DRAM_BASE + 2);
+        load.execute(Instruction::LrW {
+            rd: 7,
+            rs1: 5,
+            aq: false,
+            rl: false,
+        });
+        assert_trap(&load, inst::CAUSE_MISALIGNED_LOAD, DRAM_BASE + 2, DRAM_BASE);
+
+        let mut store = trapped_machine();
+        store.cpu_mut().set_pc(DRAM_BASE);
+        store.cpu_mut().write_gpr(5, DRAM_BASE + 4);
+        store.execute(Instruction::ScD {
+            rd: 7,
+            rs1: 5,
+            rs2: 0,
+            aq: false,
+            rl: false,
+        });
+        assert_trap(
+            &store,
+            inst::CAUSE_MISALIGNED_STORE,
+            DRAM_BASE + 4,
+            DRAM_BASE,
+        );
+    }
+
+    #[test]
+    fn amo_min_max_operations_honor_their_signedness() {
+        assert_eq!(apply_amo_w(0xffff_ffff, 1, AmoOperation::Min), 0xffff_ffff);
+        assert_eq!(apply_amo_w(0xffff_ffff, 1, AmoOperation::Max), 1);
+        assert_eq!(apply_amo_w(0xffff_ffff, 1, AmoOperation::Minu), 1);
+        assert_eq!(apply_amo_w(0xffff_ffff, 1, AmoOperation::Maxu), 0xffff_ffff);
+        assert_eq!(apply_amo_d(u64::MAX, 1, AmoOperation::Min), u64::MAX);
+        assert_eq!(apply_amo_d(u64::MAX, 1, AmoOperation::Max), 1);
+        assert_eq!(apply_amo_d(u64::MAX, 1, AmoOperation::Minu), 1);
+        assert_eq!(apply_amo_d(u64::MAX, 1, AmoOperation::Maxu), u64::MAX);
+    }
+
+    #[test]
+    fn amo_word_returns_the_sign_extended_old_value() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+        machine.cpu_mut().write_gpr(6, 1);
+        machine.bus_mut().write_u32(DRAM_BASE, 0x8000_0000).unwrap();
+
+        machine.execute(Instruction::AmoSwapW {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(7), 0xffff_ffff_8000_0000);
+        assert_eq!(machine.bus_mut().read_u32(DRAM_BASE).unwrap(), 1);
+    }
+
+    #[test]
+    fn amo_write_invalidates_the_reservation() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+        machine.cpu_mut().write_gpr(6, 1);
+        machine.execute(Instruction::LrD {
+            rd: 7,
+            rs1: 5,
+            aq: false,
+            rl: false,
+        });
+        machine.execute(Instruction::AmoAddD {
+            rd: 8,
+            rs1: 5,
+            rs2: 6,
+            aq: false,
+            rl: false,
+        });
+        machine.execute(Instruction::ScD {
+            rd: 9,
+            rs1: 5,
+            rs2: 6,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(9), 1);
+    }
+
+    #[test]
+    fn amo_faults_report_alignment_and_read_phase_causes() {
+        let mut misaligned = trapped_machine();
+        misaligned.cpu_mut().set_pc(DRAM_BASE);
+        misaligned.cpu_mut().write_gpr(5, DRAM_BASE + 2);
+        misaligned.execute(Instruction::AmoAddW {
+            rd: 7,
+            rs1: 5,
+            rs2: 0,
+            aq: false,
+            rl: false,
+        });
+        assert_trap(
+            &misaligned,
+            inst::CAUSE_MISALIGNED_STORE,
+            DRAM_BASE + 2,
+            DRAM_BASE,
+        );
+
+        let mut read_fault = trapped_machine();
+        read_fault.cpu_mut().set_pc(DRAM_BASE);
+        read_fault.cpu_mut().write_gpr(5, DRAM_BASE - 8);
+        read_fault.cpu_mut().write_gpr(7, 0x55);
+        read_fault.execute(Instruction::AmoSwapD {
+            rd: 7,
+            rs1: 5,
+            rs2: 0,
+            aq: false,
+            rl: false,
+        });
+        assert_eq!(read_fault.cpu().read_gpr(7), 0x55);
+        assert_trap(
+            &read_fault,
+            inst::CAUSE_LOAD_ACCESS,
+            DRAM_BASE - 8,
+            DRAM_BASE,
+        );
+    }
+
+    #[test]
+    fn atomic_write_faults_report_store_access_and_preserve_rd() {
+        let mut memory = Memory::with_size(64);
+        memory.write_u32(DRAM_BASE, 1).unwrap();
+        let mut amo = Machine::new(WriteFaultBus(memory));
+        assert!(amo.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+        amo.cpu_mut().set_pc(DRAM_BASE);
+        amo.cpu_mut().write_gpr(5, DRAM_BASE);
+        amo.cpu_mut().write_gpr(6, 2);
+        amo.cpu_mut().write_gpr(7, 0x55);
+
+        amo.execute(Instruction::AmoAddW {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(amo.cpu().read_gpr(7), 0x55);
+        assert_trap(&amo, inst::CAUSE_STORE_ACCESS, DRAM_BASE, DRAM_BASE);
+
+        let mut memory = Memory::with_size(64);
+        memory.write_u64(DRAM_BASE, 1).unwrap();
+        let mut sc = Machine::new(WriteFaultBus(memory));
+        assert!(sc.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+        sc.cpu_mut().set_pc(DRAM_BASE);
+        sc.cpu_mut().write_gpr(5, DRAM_BASE);
+        sc.cpu_mut().write_gpr(6, 2);
+        sc.execute(Instruction::LrD {
+            rd: 7,
+            rs1: 5,
+            aq: false,
+            rl: false,
+        });
+        sc.cpu_mut().write_gpr(7, 0x55);
+
+        sc.execute(Instruction::ScD {
+            rd: 7,
+            rs1: 5,
+            rs2: 6,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(sc.cpu().read_gpr(7), 0x55);
+        assert_trap(&sc, inst::CAUSE_STORE_ACCESS, DRAM_BASE, DRAM_BASE + 4);
     }
 
     #[test]
@@ -1371,7 +1918,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64im_and_ignores_warl_writes() {
+    fn misa_reports_rv64ima_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -1380,6 +1927,7 @@ mod tests {
         });
         let misa = machine.cpu().read_gpr(5);
         assert_eq!(misa >> 62, 2, "MXL");
+        assert_ne!(misa & 1, 0, "A extension");
         assert_ne!(misa & (1 << 8), 0, "I extension");
         assert_ne!(misa & (1 << 12), 0, "M extension");
 
