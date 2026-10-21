@@ -11,7 +11,7 @@ use std::process::Command;
 
 use compliance::{GateReport, expected_failures, required_dir, run_checked, run_elf};
 
-const LEGACY_FAMILIES: [&str; 4] = ["rv64ui", "rv64um", "rv64ua", "rv64mi"];
+const LEGACY_FAMILIES: [&str; 5] = ["rv64ui", "rv64um", "rv64ua", "rv64uc", "rv64mi"];
 
 #[test]
 #[ignore = "requires RISCV_TESTS_DIR and runs the external riscv-tests suite"]
@@ -49,17 +49,18 @@ fn act4_gate() {
         env::var_os("ACT4_WORKDIR").map(PathBuf::from),
     );
 
-    run_checked(
-        Command::new("mise")
-            .args(["exec", "--", "uv", "run", "act"])
-            .arg(config)
-            .arg("--workdir")
-            .arg(&workdir)
-            .arg("--fast")
-            .current_dir(&root),
-    );
+    let mut act = Command::new("mise");
+    act.args(["exec", "--", "uv", "run", "act"])
+        .arg(config)
+        .arg("--workdir")
+        .arg(&workdir)
+        .arg("--fast");
+    if let Some(extensions) = env::var_os("ACT4_EXTENSIONS") {
+        act.arg("--extensions").arg(extensions);
+    }
+    run_checked(act.current_dir(&root));
 
-    let elf_root = workdir.join("arvsr-rv64ima").join("elfs");
+    let elf_root = workdir.join("arvsr-rv64imac").join("elfs");
     let mut elfs = Vec::new();
     collect_elfs(&elf_root, &mut elfs);
     elfs.sort();

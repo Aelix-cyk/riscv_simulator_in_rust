@@ -3,17 +3,19 @@
 $schema: config_schema.json#
 kind: architecture configuration
 type: fully configured
-name: arvsr-rv64ima
-description: Current aRVSR RV64IMA machine-mode implementation
+name: arvsr-rv64imac
+description: Current aRVSR RV64IMA machine-mode implementation with Zca
 implemented_extensions:
   - { name: I, version: "= 2.1" }
   - { name: M, version: "= 2.0" }
   - { name: Zmmul, version: "= 1.0.0" }
   - { name: A, version: "= 2.1.0" }
+  - { name: C, version: "= 2.0" }
   - { name: Zicsr, version: "= 2.0" }
   - { name: Zifencei, version: "= 2.0.0" }
   - { name: Zaamo, version: "= 1.0.0" }
   - { name: Zalrsc, version: "= 1.0.0" }
+  - { name: Zca, version: "= 1.0.0" }
   - { name: Sm, version: "= 1.12.0" }
 
 params:
@@ -24,6 +26,7 @@ params:
   LRSC_MISALIGNED_BEHAVIOR: always raise misaligned exception
   LRSC_FAIL_ON_NON_EXACT_LRSC: false
   MUTABLE_MISA_A: false
+  MUTABLE_MISA_C: false
   # M params
   MUTABLE_MISA_M: false
   # Sm params
