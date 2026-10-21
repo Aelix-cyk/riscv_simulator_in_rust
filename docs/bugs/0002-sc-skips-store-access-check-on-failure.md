@@ -3,6 +3,7 @@
 | Field | Value |
 |---|---|
 | Found | 2026-10-21, code review of commit `2781866` |
+| Fixed | 2026-10-21 |
 | Affected | `src/machine.rs`, `ScW`/`ScD` arms (lines 399-426) |
 
 ## Summary
@@ -78,21 +79,22 @@ Tests cover a failed SC against valid memory and a successful SC, but never a
 failed SC to an inaccessible address, so the missing check is unobservable in
 the suite.
 
-## Suggested fix
+## Fix
 
-Check store accessibility before retiring, without mutating memory. Add a
-non-mutating bus probe (e.g. `check_write(address, width) -> Result<(), Trap>`)
-and call it in both SC arms before branching on `success`, mapping failure to
-`CAUSE_STORE_ACCESS` with the address as `tval`. The actual store stays
-conditional on the reservation.
+Added `Bus::check_write(address, width)`. Memory checks the complete span without
+mutating it, and buses with distinct read/write permissions can override the
+probe. Both SC arms now check write permission before consuming the reservation
+or deciding whether SC succeeds. The actual store remains conditional on a
+successful reservation.
 
 ## Regression tests
 
-- `sc_w_failure_to_unmapped_address_traps`
-- `sc_d_failure_to_unmapped_address_traps`
+- `sc_failure_to_unmapped_address_traps_as_store_access`
+- `check_write_checks_the_entire_span_without_mutating_memory`
 
-Each asserts the cause (`0x7`), `tval`, untouched `rd`, and an unmoved PC, and
-should be cross-checked against `$SPIKE`.
+The SC test covers both widths and asserts the cause (`0x7`), `tval`, untouched
+`rd`, and an unmoved PC. The memory test verifies the probe is non-mutating and
+checks the complete access span.
 
 ## Prevention
 

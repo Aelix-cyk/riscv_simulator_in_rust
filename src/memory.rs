@@ -98,6 +98,10 @@ impl Bus for Memory {
         self.write_bytes::<8>(address, value.to_le_bytes())
     }
 
+    fn check_write(&mut self, address: u64, width: u64) -> Result<(), Trap> {
+        self.offset(address, width).map(|_| ())
+    }
+
     fn load_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<(), Trap> {
         // Check the whole span before copying so a fault leaves memory untouched.
         let offset = self.offset(address, bytes.len() as u64)?;
@@ -206,6 +210,20 @@ mod tests {
             memory.load_bytes(LAST_BYTE, &[0, 1]),
             Err(Trap::AccessFault)
         );
+    }
+
+    #[test]
+    fn check_write_checks_the_entire_span_without_mutating_memory() {
+        let mut memory = Memory::with_size(16);
+        memory.write_u64(DRAM_BASE + 8, u64::MAX).unwrap();
+
+        memory.check_write(DRAM_BASE + 8, 8).unwrap();
+        assert_eq!(memory.read_u64(DRAM_BASE + 8).unwrap(), u64::MAX);
+        assert_eq!(
+            memory.check_write(DRAM_BASE + 8, 16),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(memory.read_u64(DRAM_BASE + 8).unwrap(), u64::MAX);
     }
 
     #[test]

@@ -400,6 +400,9 @@ impl<B: Bus> Machine<B> {
                 let address = self.gpr(rs1);
                 let source = self.gpr(rs2);
                 Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_STORE)?;
+                self.bus
+                    .check_write(address, 4)
+                    .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 let success = self.reservation.take() == Some(Self::reservation_set(address));
                 if success {
                     self.bus
@@ -414,6 +417,9 @@ impl<B: Bus> Machine<B> {
                 let address = self.gpr(rs1);
                 let source = self.gpr(rs2);
                 Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_STORE)?;
+                self.bus
+                    .check_write(address, 8)
+                    .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 let success = self.reservation.take() == Some(Self::reservation_set(address));
                 if success {
                     self.bus
@@ -743,7 +749,7 @@ impl<B: Bus> Machine<B> {
         let old = self
             .bus
             .read_u32(address)
-            .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+            .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
         let new = apply_amo_w(old, source, operation);
         self.bus
             .write_u32(address, new)
@@ -767,7 +773,7 @@ impl<B: Bus> Machine<B> {
         let old = self
             .bus
             .read_u64(address)
-            .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+            .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
         let new = apply_amo_d(old, source, operation);
         self.bus
             .write_u64(address, new)
@@ -873,6 +879,10 @@ mod tests {
         }
 
         fn write_u8(&mut self, _address: u64, _value: u8) -> Result<(), Trap> {
+            Err(Trap::AccessFault)
+        }
+
+        fn check_write(&mut self, _address: u64, _width: u64) -> Result<(), Trap> {
             Err(Trap::AccessFault)
         }
     }
@@ -1244,6 +1254,42 @@ mod tests {
     }
 
     #[test]
+    fn sc_failure_to_unmapped_address_traps_as_store_access() {
+        for (instruction, address) in [
+            (
+                Instruction::ScW {
+                    rd: 7,
+                    rs1: 5,
+                    rs2: 0,
+                    aq: false,
+                    rl: false,
+                },
+                DRAM_BASE - 8,
+            ),
+            (
+                Instruction::ScD {
+                    rd: 7,
+                    rs1: 5,
+                    rs2: 0,
+                    aq: false,
+                    rl: false,
+                },
+                DRAM_BASE - 8,
+            ),
+        ] {
+            let mut machine = trapped_machine();
+            machine.cpu_mut().set_pc(DRAM_BASE);
+            machine.cpu_mut().write_gpr(5, address);
+            machine.cpu_mut().write_gpr(7, 0x55);
+
+            machine.execute(instruction);
+
+            assert_eq!(machine.cpu().read_gpr(7), 0x55, "rd must not change");
+            assert_trap(&machine, inst::CAUSE_STORE_ACCESS, address, DRAM_BASE);
+        }
+    }
+
+    #[test]
     fn ordinary_store_invalidates_the_reservation() {
         let mut machine = machine();
         machine.cpu_mut().write_gpr(5, DRAM_BASE);
@@ -1362,7 +1408,7 @@ mod tests {
     }
 
     #[test]
-    fn amo_faults_report_alignment_and_read_phase_causes() {
+    fn amo_alignment_faults_report_store_misaligned() {
         let mut misaligned = trapped_machine();
         misaligned.cpu_mut().set_pc(DRAM_BASE);
         misaligned.cpu_mut().write_gpr(5, DRAM_BASE + 2);
@@ -1379,25 +1425,36 @@ mod tests {
             DRAM_BASE + 2,
             DRAM_BASE,
         );
+    }
 
-        let mut read_fault = trapped_machine();
-        read_fault.cpu_mut().set_pc(DRAM_BASE);
-        read_fault.cpu_mut().write_gpr(5, DRAM_BASE - 8);
-        read_fault.cpu_mut().write_gpr(7, 0x55);
-        read_fault.execute(Instruction::AmoSwapD {
-            rd: 7,
-            rs1: 5,
-            rs2: 0,
-            aq: false,
-            rl: false,
-        });
-        assert_eq!(read_fault.cpu().read_gpr(7), 0x55);
-        assert_trap(
-            &read_fault,
-            inst::CAUSE_LOAD_ACCESS,
-            DRAM_BASE - 8,
-            DRAM_BASE,
-        );
+    #[test]
+    fn amo_read_faults_report_store_access() {
+        for instruction in [
+            Instruction::AmoAddW {
+                rd: 7,
+                rs1: 5,
+                rs2: 0,
+                aq: false,
+                rl: false,
+            },
+            Instruction::AmoAddD {
+                rd: 7,
+                rs1: 5,
+                rs2: 0,
+                aq: false,
+                rl: false,
+            },
+        ] {
+            let mut machine = trapped_machine();
+            machine.cpu_mut().set_pc(DRAM_BASE);
+            machine.cpu_mut().write_gpr(5, DRAM_BASE - 8);
+            machine.cpu_mut().write_gpr(7, 0x55);
+
+            machine.execute(instruction);
+
+            assert_eq!(machine.cpu().read_gpr(7), 0x55);
+            assert_trap(&machine, inst::CAUSE_STORE_ACCESS, DRAM_BASE - 8, DRAM_BASE);
+        }
     }
 
     #[test]

@@ -32,6 +32,17 @@ pub trait Bus {
     fn write_u64(&mut self, address: u64, value: u64) -> Result<(), Trap> {
         write_le::<Self, 8>(self, address, value.to_le_bytes())
     }
+    /// Checks whether a write of `width` bytes at `address` is permitted
+    /// without changing memory.
+    ///
+    /// The default probes read access byte by byte. Implementations whose read
+    /// and write permissions differ must override this method.
+    fn check_write(&mut self, address: u64, width: u64) -> Result<(), Trap> {
+        for offset in 0..width {
+            self.read_u8(offset_address(address, offset)?)?;
+        }
+        Ok(())
+    }
     /// Copies `bytes` starting at `address`.
     ///
     /// The default writes byte by byte and may leave a partial image when a write
@@ -166,6 +177,7 @@ mod tests {
 
         assert_eq!(device.read_u32(6), Err(Trap::AccessFault));
         assert_eq!(device.write_u64(4, 0), Err(Trap::AccessFault));
+        assert_eq!(device.check_write(6, 4), Err(Trap::AccessFault));
         assert_eq!(device.load_bytes(7, &[0, 1]), Err(Trap::AccessFault));
     }
 }

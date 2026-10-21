@@ -3,6 +3,7 @@
 | Field | Value |
 |---|---|
 | Found | 2026-10-21, code review of commit `2781866` |
+| Fixed | 2026-10-21 |
 | Affected | `src/machine.rs`, `execute_amo_w` (line 746) and `execute_amo_d` (line 770) |
 
 ## Summary
@@ -64,19 +65,18 @@ in spike differential testing.
 Tests cover alignment faults and successful AMOs, but no AMO whose read phase
 falls outside memory, so the cause constant in that branch is never asserted.
 
-## Suggested fix
+## Fix
 
-Map both read-phase bus errors in `execute_amo_w` and `execute_amo_d` to
-`CAUSE_STORE_ACCESS`. Leave `lr.w`/`lr.d` as `CAUSE_LOAD_ACCESS`, since LR is a
-load. Consider one shared helper that derives the cause from the atomic
-operation rather than repeating it per phase.
+Both AMO helpers now map read- and write-phase bus errors to
+`CAUSE_STORE_ACCESS`. The LR paths remain on `CAUSE_LOAD_ACCESS`.
 
 ## Regression tests
 
-- `amoadd_w_read_fault_reports_store_access`
-- `amoadd_d_read_fault_reports_store_access`
+- `amo_read_faults_report_store_access`
+- `atomic_write_faults_report_store_access_and_preserve_rd`
 
-Assert cause `0x7` and the faulting address, and cross-check against `$SPIKE`.
+These cover `amoadd.w`, `amoadd.d`, and AMO write-fault behavior, asserting cause
+`0x7`, the faulting address, preserved `rd`, and the precise trap PC.
 
 ## Prevention
 
