@@ -14,6 +14,23 @@ pub const RA: u8 = 1;
 /// Index of the stack-pointer register, `x2`.
 pub const SP: u8 = 2;
 
+/// Privilege mode currently executing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivilegeMode {
+    User,
+    Machine,
+}
+
+impl PrivilegeMode {
+    /// Encoding used by `mstatus.MPP`.
+    pub(crate) const fn mpp_bits(self) -> u64 {
+        match self {
+            Self::User => 0,
+            Self::Machine => 0b11,
+        }
+    }
+}
+
 /// ABI names of the general-purpose registers, indexed by register number.
 pub const ABI_NAMES: [&str; GPR_COUNT] = [
     "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4",
@@ -32,6 +49,7 @@ pub struct Cpu {
     gprs: [u64; GPR_COUNT],
     pc: u64,
     csrs: Csrs,
+    privilege: PrivilegeMode,
 }
 
 impl Cpu {
@@ -41,6 +59,7 @@ impl Cpu {
             gprs: [0; GPR_COUNT],
             pc: 0,
             csrs: Csrs::default(),
+            privilege: PrivilegeMode::Machine,
         }
     }
 
@@ -52,6 +71,16 @@ impl Cpu {
     /// Sets the program counter.
     pub fn set_pc(&mut self, value: u64) {
         self.pc = value;
+    }
+
+    /// Returns the current privilege mode.
+    pub fn privilege(&self) -> PrivilegeMode {
+        self.privilege
+    }
+
+    /// Sets the current privilege mode.
+    pub(crate) fn set_privilege(&mut self, privilege: PrivilegeMode) {
+        self.privilege = privilege;
     }
 
     /// Reads general-purpose register `index`. `x0` always reads as zero.
@@ -68,12 +97,13 @@ impl Cpu {
 
     /// Reads an implemented CSR, or returns `None` for an unsupported address.
     pub fn read_csr(&self, address: u16) -> Option<u64> {
-        self.csrs.read(address)
+        self.csrs.read_with_privilege(address, self.privilege)
     }
 
     /// Writes an implemented CSR and reports whether the address was valid.
     pub(crate) fn write_csr(&mut self, address: u16, value: u64) -> bool {
-        self.csrs.write(address, value)
+        self.csrs
+            .write_with_privilege(address, value, self.privilege)
     }
 
     /// Immutable CSR state for trap delivery.

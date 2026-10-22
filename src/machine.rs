@@ -1,7 +1,7 @@
 //! A hart plus the bus it executes against.
 
 use crate::bus::Bus;
-use crate::cpu::Cpu;
+use crate::cpu::{Cpu, PrivilegeMode};
 use crate::decode::{DecodedInstruction, Instruction, decode_word, is_compressed};
 use crate::inst;
 use crate::trap::Trap;
@@ -124,13 +124,18 @@ impl<B: Bus> Machine<B> {
             Ok(instruction) => instruction,
             Err(failure) => {
                 self.enter_trap(self.fetch_exception(pc, failure.raw, failure.trap));
+                self.cpu.csrs_mut().advance_cycle();
                 return;
             }
         };
         if options.trace {
             println!("{pc:#010x}  {}", instruction.render());
         }
-        self.execute_with_decoded(instruction);
+        let writes_cycle = csr_write_target(instruction.instruction()) == Some(inst::CSR_MCYCLE);
+        let retired = self.execute_with_decoded(instruction);
+        if !retired || !writes_cycle {
+            self.cpu.csrs_mut().advance_cycle();
+        }
     }
 
     /// Runs until the halt self-loop retires or `step_limit` steps are taken.
@@ -195,18 +200,31 @@ impl<B: Bus> Machine<B> {
 
     /// Executes an instruction with the exact fetched encoding available for
     /// `mtval`, then delivers any synchronous exception to the trap handler.
-    fn execute_with_decoded(&mut self, decoded: DecodedInstruction) {
-        if let Err(exception) = self.execute_inner(decoded) {
-            self.enter_trap(exception);
+    fn execute_with_decoded(&mut self, decoded: DecodedInstruction) -> bool {
+        match self.execute_inner(decoded) {
+            Ok(()) => {
+                let writes_instret =
+                    csr_write_target(decoded.instruction()) == Some(inst::CSR_MINSTRET);
+                if !writes_instret {
+                    self.cpu.csrs_mut().retire_instruction();
+                }
+                true
+            }
+            Err(exception) => {
+                self.enter_trap(exception);
+                false
+            }
         }
     }
 
     /// Records trap state and transfers control to `mtvec`.
     fn enter_trap(&mut self, exception: Exception) {
         let epc = self.cpu.pc();
+        let previous = self.cpu.privilege();
         self.cpu
             .csrs_mut()
-            .enter_trap(epc, u64::from(exception.cause), exception.tval);
+            .enter_trap(epc, u64::from(exception.cause), exception.tval, previous);
+        self.cpu.set_privilege(PrivilegeMode::Machine);
         let handler = self.cpu.csrs().trap_vector();
         self.cpu.set_pc(handler);
     }
@@ -641,15 +659,26 @@ impl<B: Bus> Machine<B> {
                 self.write(rd, old);
             }
             Instruction::Ecall => {
-                return Err(Exception::new(inst::CAUSE_MACHINE_ECALL, 0));
+                let cause = match self.cpu.privilege() {
+                    PrivilegeMode::Machine => inst::CAUSE_MACHINE_ECALL,
+                    PrivilegeMode::User => inst::CAUSE_USER_ECALL,
+                };
+                return Err(Exception::new(cause, 0));
             }
             Instruction::Ebreak => {
                 return Err(Exception::new(inst::CAUSE_BREAKPOINT, pc));
             }
             Instruction::Mret => {
+                if self.cpu.privilege() != PrivilegeMode::Machine {
+                    return Err(Exception::new(
+                        inst::CAUSE_ILLEGAL_INSTRUCTION,
+                        u64::from(word),
+                    ));
+                }
                 // Check the return target before changing any machine state.
                 Self::checked_target(self.cpu.csrs().exception_pc())?;
-                let restored_pc = self.cpu.csrs_mut().return_from_m_trap();
+                let (restored_pc, privilege) = self.cpu.csrs_mut().return_from_m_trap();
+                self.cpu.set_privilege(privilege);
                 self.cpu.set_pc(restored_pc);
                 return Ok(());
             }
@@ -841,6 +870,17 @@ fn instruction_word(instruction: Instruction) -> u32 {
         | (u32::from(rd) << RD_SHIFT)
 }
 
+fn csr_write_target(instruction: Instruction) -> Option<u16> {
+    match instruction {
+        Instruction::Csrrw { csr, .. } | Instruction::Csrrwi { csr, .. } => Some(csr),
+        Instruction::Csrrs { csr, rs1, .. } if rs1 != 0 => Some(csr),
+        Instruction::Csrrc { csr, rs1, .. } if rs1 != 0 => Some(csr),
+        Instruction::Csrrsi { csr, zimm, .. } if zimm != 0 => Some(csr),
+        Instruction::Csrrci { csr, zimm, .. } if zimm != 0 => Some(csr),
+        _ => None,
+    }
+}
+
 /// Computes the new value for an AMO word operation.
 fn apply_amo_w(old: u32, source: u32, operation: AmoOperation) -> u32 {
     match operation {
@@ -902,6 +942,7 @@ mod tests {
     const ILLEGAL_COMPRESSED_ZERO: u16 = 0;
     const TEST_REGISTER_X5: usize = 5;
     const STANDARD_INSTRUCTION_BYTES: u64 = 4;
+    const COUNTER_RELOAD_VALUE: u64 = 5;
 
     struct WriteFaultBus(Memory);
 
@@ -2058,7 +2099,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64imac_and_ignores_warl_writes() {
+    fn misa_reports_rv64imacu_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -2112,7 +2153,7 @@ mod tests {
         machine.execute(Instruction::Ecall);
 
         assert_trap(&machine, inst::CAUSE_MACHINE_ECALL, 0, DRAM_BASE + 4);
-        let status = machine.cpu().read_csr(inst::CSR_MSTATUS).unwrap();
+        let status = machine.cpu().csrs().read(inst::CSR_MSTATUS).unwrap();
         assert_eq!(status & (1 << 3), 0, "MIE is cleared on trap entry");
         assert_eq!(status & (1 << 7), 1 << 7, "MIE is saved in MPIE");
         assert_eq!(status & (0b11 << 11), 0b11 << 11, "MPP records M-mode");
@@ -2142,7 +2183,8 @@ mod tests {
         machine.execute(Instruction::Mret);
 
         assert_eq!(machine.cpu().pc(), DRAM_BASE + 12);
-        let status = machine.cpu().read_csr(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::User);
+        let status = machine.cpu().csrs().read(inst::CSR_MSTATUS).unwrap();
         assert_eq!(status & (1 << 3), 1 << 3, "MIE is restored from MPIE");
         assert_eq!(status & (1 << 7), 1 << 7, "MPIE is set");
         assert_eq!(status & (0b11 << 11), 0, "MPP is set to U-mode");
@@ -2209,7 +2251,7 @@ mod tests {
     fn unsupported_csr_traps_before_writing_rd_or_csr_state() {
         let instruction = Instruction::Csrrs {
             rd: 5,
-            csr: inst::CSR_MIP,
+            csr: inst::CSR_MHPMCOUNTER3,
             rs1: 0,
         };
         let mut machine = trapped_machine();
@@ -2266,5 +2308,66 @@ mod tests {
 
         assert_eq!(machine.cpu().pc(), 8, "both fences retire");
         assert_eq!(machine.cpu().read_gpr(5), 42, "no register changes");
+    }
+
+    #[test]
+    fn user_ecall_reports_the_user_cause_and_privilege() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().set_privilege(PrivilegeMode::User);
+
+        machine.execute(Instruction::Ecall);
+
+        assert_trap(&machine, inst::CAUSE_USER_ECALL, 0, 0);
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Machine);
+        let status = machine.cpu().csrs().read(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(status & (PrivilegeMode::User.mpp_bits() << 11), 0);
+    }
+
+    #[test]
+    fn user_mode_cannot_access_machine_csrs() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().set_privilege(PrivilegeMode::User);
+
+        let instruction = Instruction::Csrrs {
+            rd: 5,
+            csr: inst::CSR_MSCRATCH,
+            rs1: 0,
+        };
+        machine.execute(instruction);
+
+        assert_trap(
+            &machine,
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(instruction_word(instruction)),
+            0,
+        );
+    }
+
+    #[test]
+    fn counters_count_retirement_and_suppress_counter_writes() {
+        let mut machine = machine();
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MCOUNTINHIBIT), Some(0));
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine
+            .bus_mut()
+            .write_u32(DRAM_BASE, inst::MATCH_ADDI)
+            .unwrap();
+
+        machine.step(StepOptions::default());
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MCYCLE), Some(1));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(1));
+
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MINSTRET, COUNTER_RELOAD_VALUE)
+        );
+        machine.execute(Instruction::Csrrwi {
+            rd: 0,
+            csr: inst::CSR_MINSTRET,
+            zimm: 0,
+        });
+
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(0));
     }
 }
