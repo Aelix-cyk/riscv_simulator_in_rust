@@ -4,7 +4,7 @@ $schema: config_schema.json#
 kind: architecture configuration
 type: fully configured
 name: arvsr-rv64imac
-description: Current aRVSR RV64IMA machine-mode implementation with Zca
+description: aRVSR RV64IMAC machine-mode implementation with Zca
 implemented_extensions:
   - { name: I, version: "= 2.1" }
   - { name: M, version: "= 2.0" }
@@ -65,7 +65,14 @@ params:
   MTVEC_BASE_ALIGNMENT_DIRECT: 4
   MTVEC_ILLEGAL_WRITE_BEHAVIOR: retain
   NUM_PMP_ENTRIES: 0
-  MCOUNTINHIBIT_IMPLEMENTED: false
+  MCOUNTINHIBIT_IMPLEMENTED: true
+  COUNTINHIBIT_EN:
+    [
+      true, false, true, false, false, false, false, false,
+      false, false, false, false, false, false, false, false,
+      false, false, false, false, false, false, false, false,
+      false, false, false, false, false, false, false, false,
+    ]
   MCOUNTENABLE_EN:
     [
       false, false, false, false, false, false, false, false,

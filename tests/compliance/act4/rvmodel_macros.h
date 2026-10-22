@@ -4,14 +4,13 @@
 #define SAIL_CLINT_BASE_ADDRESS 0x02000000
 #define SAIL_SIMPLE_INTERRUPT_GENERATOR_BASE_ADDRESS 0x02000000
 
+#define STANDARD_SM_SUPPORTED
+
 #define RVMODEL_DATA_SECTION \
         .pushsection .tohost,"aw",@progbits;                \
         .balign 8; .global tohost; tohost: .dword 0;         \
         .balign 8; .global fromhost; fromhost: .dword 0;     \
         .popsection
-
-#define RVMODEL_BOOT
-#define RVMODEL_BOOT_TO_MMODE
 
 #define RVMODEL_HALT_PASS \
   li x1, 1                ;\
@@ -33,12 +32,9 @@ write_tohost_fail:        ;\
 #define RVMODEL_IO_WRITE_STR(_R1, _R2, _R3, _STR_PTR)
 
 #define RVMODEL_ACCESS_FAULT_ADDRESS 0x00000000
-#define RVMODEL_MTIME_ADDRESS 0x0200BFF8
-#define RVMODEL_MTIMECMP_ADDRESS 0x02004000
 #define RVMODEL_INTERRUPT_LATENCY 10
 #define RVMODEL_TIMER_INT_SOON_DELAY 1000
 #define RVMODEL_MAX_CYCLES_PER_TIMER_TICK 100
-#define CLINT_BASE_ADDRESS 0x02000000
 
 #define RVMODEL_SET_MEXT_INT(_R1, _R2)
 #define RVMODEL_CLR_MEXT_INT(_R1, _R2)
