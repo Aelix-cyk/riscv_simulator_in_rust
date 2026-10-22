@@ -4,15 +4,16 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 
 ## Status
 
-A 64-bit hart that executes RV64IMAC plus Zicsr — the integer ALU operations, all
-integer multiply/divide and atomic instructions, Zca compressed instructions,
-branches, jumps, loads and stores, `fence`/`fence.i`, and the six CSR
-read/modify/write forms. Synchronous exceptions, including `ecall` and `ebreak`,
-enter a machine-mode handler through `mtvec`. Implemented CSRs include WARL `misa`
-(RV64IMAC), `mstatus`, `mtvec`, `mscratch`, `mepc`, `mcause`, and `mtval`. The
-target profile is RVA22S64, built up progressively: see `GLOSSARY.md` for
-terminology, `docs/impl-choices/` for the requirements and the choices the
-specification leaves open.
+A 64-bit hart that executes RV64IMAC with M/U privilege plus Zicsr and Zicntr —
+the integer ALU operations, all integer multiply/divide and atomic instructions,
+Zca compressed instructions, branches, jumps, loads and stores,
+`fence`/`fence.i`, the six CSR read/modify/write forms, and deterministic cycle,
+time, and instruction counters. Synchronous exceptions, including `ecall` and
+`ebreak`, enter a machine-mode handler through `mtvec`. Implemented CSRs include
+WARL `misa` (RV64IMACU), machine identity/status/trap/delegation registers, and
+counter controls. The target profile is RVA22S64, built up progressively: see
+`GLOSSARY.md` for terminology, `docs/impl-choices/` for the requirements and the
+choices the specification leaves open.
 
 ## Usage
 
@@ -35,7 +36,7 @@ its loadable bytes. Fixtures use `tests/fixtures/link.ld`, which places the imag
 `DRAM_BASE` with no leading gap:
 
 ```sh
-$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64imac_zifencei_zicsr -mabi=lp64 -nostdlib \
+$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64imac_zifencei_zicsr_zicntr -mabi=lp64 -nostdlib \
     -I tests/fixtures -Wl,-T,tests/fixtures/link.ld \
     -o /tmp/loop.elf tests/fixtures/loop.S
 $RISCV/bin/riscv64-unknown-elf-objcopy -O binary /tmp/loop.elf /tmp/loop.bin
@@ -70,7 +71,9 @@ The ACT4 gate requires `mise`, `uv`, UDB, and `spike` on `PATH`. It generates
 project-local ACT4 ELFs under `target/compliance/act4` by default. Known
 unsupported features and deferred bugs live in
 `tests/compliance/expected_failures.tsv`; listed passes or unlisted failures
-fail the gate.
+fail the gate. The ACT4 Zicsr configuration uses a writable M-mode CSR to test
+instruction semantics; U-mode access and Zicntr behavior are covered by the
+`rv64mi` gate.
 
 ## Development tooling
 

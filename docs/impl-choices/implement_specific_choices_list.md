@@ -12,13 +12,13 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| Hart count and topology | One hart, hart ID 0 | Decided |
+| Hart count and topology | One hart, hart ID 0, supporting M and U privilege modes | Decided |
 | Reset PC, the platform's boot address | `DRAM_BASE` (`0x8000_0000`); images link and load there | Decided |
 | Reset value of GPRs and CSRs | All zero | Decided |
 | IALIGN | 16; Zca provides compressed instructions, so branch and jump targets need only be two-byte aligned | Decided |
 | Behaviour on a misaligned instruction address | Raise an instruction-address-misaligned exception when the PC or control-transfer target is not two-byte aligned | Decided |
-| `misa` | WARL RV64IMAC: `MXL = 2`, with A, C, I, and M fixed; writes are accepted and ignored | Decided |
-| `mvendorid`, `marchid`, `mimpid` | Not implemented | Open |
+| `misa` | WARL RV64IMACU: `MXL = 2`, with A, C, I, M, and U fixed; writes are accepted and ignored | Decided |
+| `mvendorid`, `marchid`, `mimpid` | Read-only zero | Decided |
 | Physical address width | Registers are 64-bit; the implemented physical space is the single DRAM region below | Decided |
 
 ## 2. Memory map, attributes, and cache
@@ -38,9 +38,12 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
 | Trap vector base and alignment | `mtvec` implemented in Direct mode; base writes are masked to 4-byte alignment. `stvec` remains absent | Decided for M-mode |
+| Privilege transitions | `mret` enters the mode recorded in `mstatus.MPP`; M-mode CSR access from U-mode raises illegal-instruction | Decided |
 | Interrupt controller | None | Open |
 | Timer facility | None; the profile deliberately leaves Sstc optional | Open |
 | Number of hardware performance counters | `Zihpm` is mandatory, but the count is a choice | Open |
+| Base counters | Full 64-bit `mcycle` and `minstret`, with `cycle`, `time`, and `instret` aliases; `time` mirrors `mcycle` | Decided |
+| Counter access control | `mcounteren` gates U-mode reads for `cycle`, `time`, and `instret`; `mcountinhibit` stops counting | Decided |
 | `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; the profile allows `PAUSE` to execute as a NOP | Open |
 | Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
 
