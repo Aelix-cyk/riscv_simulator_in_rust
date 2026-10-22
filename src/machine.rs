@@ -1,7 +1,7 @@
 //! A hart plus the bus it executes against.
 
 use crate::bus::Bus;
-use crate::cpu::{Cpu, PrivilegeMode};
+use crate::cpu::{Cpu, PrivilegeMode, X0};
 use crate::decode::{DecodedInstruction, Instruction, decode_word, is_compressed};
 use crate::inst;
 use crate::trap::Trap;
@@ -131,11 +131,7 @@ impl<B: Bus> Machine<B> {
         if options.trace {
             println!("{pc:#010x}  {}", instruction.render());
         }
-        let writes_cycle = csr_write_target(instruction.instruction()) == Some(inst::CSR_MCYCLE);
-        let retired = self.execute_with_decoded(instruction);
-        if !retired || !writes_cycle {
-            self.cpu.csrs_mut().advance_cycle();
-        }
+        self.execute_with_decoded(instruction);
     }
 
     /// Runs until the halt self-loop retires or `step_limit` steps are taken.
@@ -201,17 +197,21 @@ impl<B: Bus> Machine<B> {
     /// Executes an instruction with the exact fetched encoding available for
     /// `mtval`, then delivers any synchronous exception to the trap handler.
     fn execute_with_decoded(&mut self, decoded: DecodedInstruction) -> bool {
+        let writes_cycle = csr_write_target(decoded.instruction()) == Some(inst::CSR_MCYCLE);
+        let writes_instret = csr_write_target(decoded.instruction()) == Some(inst::CSR_MINSTRET);
         match self.execute_inner(decoded) {
             Ok(()) => {
-                let writes_instret =
-                    csr_write_target(decoded.instruction()) == Some(inst::CSR_MINSTRET);
                 if !writes_instret {
                     self.cpu.csrs_mut().retire_instruction();
+                }
+                if !writes_cycle {
+                    self.cpu.csrs_mut().advance_cycle();
                 }
                 true
             }
             Err(exception) => {
                 self.enter_trap(exception);
+                self.cpu.csrs_mut().advance_cycle();
                 false
             }
         }
@@ -626,7 +626,7 @@ impl<B: Bus> Machine<B> {
             Instruction::Csrrs { rd, csr, rs1 } => {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
-                if source != 0 {
+                if writes_csr_from_register(rs1) {
                     self.write_csr(csr, old | source, word)?;
                 }
                 self.write(rd, old);
@@ -634,7 +634,7 @@ impl<B: Bus> Machine<B> {
             Instruction::Csrrc { rd, csr, rs1 } => {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
-                if source != 0 {
+                if writes_csr_from_register(rs1) {
                     self.write_csr(csr, old & !source, word)?;
                 }
                 self.write(rd, old);
@@ -873,12 +873,19 @@ fn instruction_word(instruction: Instruction) -> u32 {
 fn csr_write_target(instruction: Instruction) -> Option<u16> {
     match instruction {
         Instruction::Csrrw { csr, .. } | Instruction::Csrrwi { csr, .. } => Some(csr),
-        Instruction::Csrrs { csr, rs1, .. } if rs1 != 0 => Some(csr),
-        Instruction::Csrrc { csr, rs1, .. } if rs1 != 0 => Some(csr),
+        Instruction::Csrrs { csr, rs1, .. } | Instruction::Csrrc { csr, rs1, .. }
+            if writes_csr_from_register(rs1) =>
+        {
+            Some(csr)
+        }
         Instruction::Csrrsi { csr, zimm, .. } if zimm != 0 => Some(csr),
         Instruction::Csrrci { csr, zimm, .. } if zimm != 0 => Some(csr),
         _ => None,
     }
+}
+
+fn writes_csr_from_register(register: u8) -> bool {
+    usize::from(register) != X0
 }
 
 /// Computes the new value for an AMO word operation.
@@ -943,6 +950,8 @@ mod tests {
     const TEST_REGISTER_X5: usize = 5;
     const STANDARD_INSTRUCTION_BYTES: u64 = 4;
     const COUNTER_RELOAD_VALUE: u64 = 5;
+    const COUNTER_CY_ENABLE: u64 = 1;
+    const CYCLE_RELOAD_VALUE: u64 = 42;
 
     struct WriteFaultBus(Memory);
 
@@ -2369,5 +2378,117 @@ mod tests {
         });
 
         assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(0));
+    }
+
+    #[test]
+    fn zero_valued_csr_source_still_attempts_a_read_only_write() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().write_gpr(6, 0);
+        machine.cpu_mut().write_gpr(5, 7);
+
+        machine.execute(Instruction::Csrrs {
+            rd: 5,
+            csr: inst::CSR_CYCLE,
+            rs1: 6,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(5), 7);
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(u64::from(inst::CAUSE_ILLEGAL_INSTRUCTION))
+        );
+    }
+
+    #[test]
+    fn user_counter_read_requires_x0_for_read_only_csrrs() {
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MCOUNTEREN, COUNTER_CY_ENABLE)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::User);
+
+        machine.execute(Instruction::Csrrs {
+            rd: 5,
+            csr: inst::CSR_CYCLE,
+            rs1: 0,
+        });
+        assert_eq!(machine.cpu().read_gpr(5), 0);
+
+        machine.cpu_mut().write_gpr(6, 0);
+        machine.execute(Instruction::Csrrc {
+            rd: 5,
+            csr: inst::CSR_INSTRET,
+            rs1: 6,
+        });
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(u64::from(inst::CAUSE_ILLEGAL_INSTRUCTION))
+        );
+    }
+
+    #[test]
+    fn execute_advances_both_counters() {
+        let mut machine = machine();
+
+        machine.execute(Instruction::Addi {
+            rd: 0,
+            rs1: 0,
+            imm: 0,
+        });
+
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MCYCLE), Some(1));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(1));
+    }
+
+    #[test]
+    fn execute_and_step_observe_identical_counter_effects() {
+        let instruction = Instruction::Addi {
+            rd: 0,
+            rs1: 0,
+            imm: 0,
+        };
+        let mut stepped = machine();
+        stepped
+            .bus_mut()
+            .write_u32(DRAM_BASE, inst::MATCH_ADDI)
+            .unwrap();
+        stepped.cpu_mut().set_pc(DRAM_BASE);
+        stepped.step(StepOptions::default());
+
+        let mut executed = machine();
+        executed.execute(instruction);
+
+        assert_eq!(
+            stepped.cpu().read_csr(inst::CSR_MCYCLE),
+            executed.cpu().read_csr(inst::CSR_MCYCLE)
+        );
+        assert_eq!(
+            stepped.cpu().read_csr(inst::CSR_MINSTRET),
+            executed.cpu().read_csr(inst::CSR_MINSTRET)
+        );
+    }
+
+    #[test]
+    fn counter_write_and_trap_advance_cycles_once() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().write_gpr(6, CYCLE_RELOAD_VALUE);
+        machine.execute(Instruction::Csrrw {
+            rd: 0,
+            csr: inst::CSR_MCYCLE,
+            rs1: 6,
+        });
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCYCLE),
+            Some(CYCLE_RELOAD_VALUE)
+        );
+
+        machine.execute(Instruction::Ecall);
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCYCLE),
+            Some(CYCLE_RELOAD_VALUE + 1)
+        );
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(1));
     }
 }
