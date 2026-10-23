@@ -13,6 +13,9 @@
 use crate::decode::{Instruction, Word};
 use crate::inst;
 
+const WORD_BITS: u32 = 32;
+const DOUBLEWORD_BITS: u32 = 64;
+
 /// One row of the instruction table.
 struct Row {
     /// Bits that must be present in the word.
@@ -66,6 +69,73 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_SLLW, inst::MASK_SLLW, sllw),
     row(inst::MATCH_SRLW, inst::MASK_SRLW, srlw),
     row(inst::MATCH_SRAW, inst::MASK_SRAW, sraw),
+    // F-extension loads, stores, arithmetic, and conversions.
+    row(inst::MATCH_FLW, inst::MASK_FLW, flw),
+    row(inst::MATCH_FSW, inst::MASK_FSW, fsw),
+    row(inst::MATCH_FADD_S, inst::MASK_FADD_S, fadd_s),
+    row(inst::MATCH_FSUB_S, inst::MASK_FSUB_S, fsub_s),
+    row(inst::MATCH_FMUL_S, inst::MASK_FMUL_S, fmul_s),
+    row(inst::MATCH_FDIV_S, inst::MASK_FDIV_S, fdiv_s),
+    row(
+        inst::MATCH_FSQRT_S,
+        fp_rounding_mask(inst::MASK_FSQRT_S),
+        fsqrt_s,
+    ),
+    row(inst::MATCH_FSGNJ_S, inst::MASK_FSGNJ_S, fsgnj_s),
+    row(inst::MATCH_FSGNJN_S, inst::MASK_FSGNJN_S, fsgnjn_s),
+    row(inst::MATCH_FSGNJX_S, inst::MASK_FSGNJX_S, fsgnjx_s),
+    row(inst::MATCH_FMIN_S, inst::MASK_FMIN_S, fmin_s),
+    row(inst::MATCH_FMAX_S, inst::MASK_FMAX_S, fmax_s),
+    row(inst::MATCH_FEQ_S, inst::MASK_FEQ_S, feq_s),
+    row(inst::MATCH_FLT_S, inst::MASK_FLT_S, flt_s),
+    row(inst::MATCH_FLE_S, inst::MASK_FLE_S, fle_s),
+    row(inst::MATCH_FCLASS_S, inst::MASK_FCLASS_S, fclass_s),
+    row(
+        inst::MATCH_FCVT_W_S,
+        fp_rounding_mask(inst::MASK_FCVT_W_S),
+        fcvt_w_s,
+    ),
+    row(
+        inst::MATCH_FCVT_WU_S,
+        fp_rounding_mask(inst::MASK_FCVT_WU_S),
+        fcvt_wu_s,
+    ),
+    row(
+        inst::MATCH_FCVT_L_S,
+        fp_rounding_mask(inst::MASK_FCVT_L_S),
+        fcvt_l_s,
+    ),
+    row(
+        inst::MATCH_FCVT_LU_S,
+        fp_rounding_mask(inst::MASK_FCVT_LU_S),
+        fcvt_lu_s,
+    ),
+    row(
+        inst::MATCH_FCVT_S_W,
+        fp_rounding_mask(inst::MASK_FCVT_S_W),
+        fcvt_s_w,
+    ),
+    row(
+        inst::MATCH_FCVT_S_WU,
+        fp_rounding_mask(inst::MASK_FCVT_S_WU),
+        fcvt_s_wu,
+    ),
+    row(
+        inst::MATCH_FCVT_S_L,
+        fp_rounding_mask(inst::MASK_FCVT_S_L),
+        fcvt_s_l,
+    ),
+    row(
+        inst::MATCH_FCVT_S_LU,
+        fp_rounding_mask(inst::MASK_FCVT_S_LU),
+        fcvt_s_lu,
+    ),
+    row(inst::MATCH_FMV_X_W, inst::MASK_FMV_X_W, fmv_x_w),
+    row(inst::MATCH_FMV_W_X, inst::MASK_FMV_W_X, fmv_w_x),
+    row(inst::MATCH_FMADD_S, inst::MASK_FMADD_S, fmadd_s),
+    row(inst::MATCH_FMSUB_S, inst::MASK_FMSUB_S, fmsub_s),
+    row(inst::MATCH_FNMSUB_S, inst::MASK_FNMSUB_S, fnmsub_s),
+    row(inst::MATCH_FNMADD_S, inst::MASK_FNMADD_S, fnmadd_s),
     // M-extension multiplication.
     row(inst::MATCH_MUL, inst::MASK_MUL, mul),
     row(inst::MATCH_MULH, inst::MASK_MULH, mulh),
@@ -146,6 +216,12 @@ const TABLE: &[Row] = &[
 /// Builds a table row.
 const fn row(code: u32, mask: u32, build: fn(Word) -> Instruction) -> Row {
     Row { code, mask, build }
+}
+
+/// Ignores the rounding field so Dynamic and all static modes share one row.
+const fn fp_rounding_mask(mask: u32) -> u32 {
+    const ROUNDING_FIELD: u32 = 0b111 << 12;
+    mask & !ROUNDING_FIELD
 }
 
 fn addi(word: Word) -> Instruction {
@@ -369,6 +445,150 @@ fn sraw(word: Word) -> Instruction {
         rd: word.rd(),
         rs1: word.rs1(),
         rs2: word.rs2(),
+    }
+}
+
+fn flw(word: Word) -> Instruction {
+    Instruction::Flw {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn fsw(word: Word) -> Instruction {
+    Instruction::Fsw {
+        rs2: word.rs2(),
+        rs1: word.rs1(),
+        offset: word.s_immediate(),
+    }
+}
+
+macro_rules! fp_binary_builder {
+    ($name:ident, $operation:ident) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::FpBinary {
+                op: crate::decode::FpBinaryOp::$operation,
+                rd: word.rd(),
+                rs1: word.rs1(),
+                rs2: word.rs2(),
+                rounding: word.rounding(),
+            }
+        }
+    };
+}
+
+fp_binary_builder!(fadd_s, Add);
+fp_binary_builder!(fsub_s, Sub);
+fp_binary_builder!(fmul_s, Mul);
+fp_binary_builder!(fdiv_s, Div);
+fp_binary_builder!(fsgnj_s, SignInject);
+fp_binary_builder!(fsgnjn_s, SignInjectNegated);
+fp_binary_builder!(fsgnjx_s, SignInjectXor);
+fp_binary_builder!(fmin_s, Min);
+fp_binary_builder!(fmax_s, Max);
+
+fn fsqrt_s(word: Word) -> Instruction {
+    Instruction::FpSqrt {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rounding: word.rounding(),
+    }
+}
+
+macro_rules! fp_fused_builder {
+    ($name:ident, $operation:ident) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::FpFused {
+                op: crate::decode::FpFusedOp::$operation,
+                rd: word.rd(),
+                rs1: word.rs1(),
+                rs2: word.rs2(),
+                rs3: word.rs3(),
+                rounding: word.rounding(),
+            }
+        }
+    };
+}
+
+fp_fused_builder!(fmadd_s, Madd);
+fp_fused_builder!(fmsub_s, Msub);
+fp_fused_builder!(fnmsub_s, Nmsub);
+fp_fused_builder!(fnmadd_s, Nmadd);
+
+macro_rules! fp_compare_builder {
+    ($name:ident, $operation:ident) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::FpCompare {
+                op: crate::decode::FpCompareOp::$operation,
+                rd: word.rd(),
+                rs1: word.rs1(),
+                rs2: word.rs2(),
+            }
+        }
+    };
+}
+
+fp_compare_builder!(feq_s, Equal);
+fp_compare_builder!(flt_s, Less);
+fp_compare_builder!(fle_s, LessEqual);
+
+fn fclass_s(word: Word) -> Instruction {
+    Instruction::FpClass {
+        rd: word.rd(),
+        rs1: word.rs1(),
+    }
+}
+
+macro_rules! fp_to_int_builder {
+    ($name:ident, $width:expr, $unsigned:expr) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::FpToInt {
+                rd: word.rd(),
+                rs1: word.rs1(),
+                width: $width,
+                unsigned: $unsigned,
+                rounding: word.rounding(),
+            }
+        }
+    };
+}
+
+fp_to_int_builder!(fcvt_w_s, WORD_BITS, false);
+fp_to_int_builder!(fcvt_wu_s, WORD_BITS, true);
+fp_to_int_builder!(fcvt_l_s, DOUBLEWORD_BITS, false);
+fp_to_int_builder!(fcvt_lu_s, DOUBLEWORD_BITS, true);
+
+macro_rules! int_to_fp_builder {
+    ($name:ident, $width:expr, $unsigned:expr) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::IntToFp {
+                rd: word.rd(),
+                rs1: word.rs1(),
+                width: $width,
+                unsigned: $unsigned,
+                rounding: word.rounding(),
+            }
+        }
+    };
+}
+
+int_to_fp_builder!(fcvt_s_w, WORD_BITS, false);
+int_to_fp_builder!(fcvt_s_wu, WORD_BITS, true);
+int_to_fp_builder!(fcvt_s_l, DOUBLEWORD_BITS, false);
+int_to_fp_builder!(fcvt_s_lu, DOUBLEWORD_BITS, true);
+
+fn fmv_x_w(word: Word) -> Instruction {
+    Instruction::FpMoveToInt {
+        rd: word.rd(),
+        rs1: word.rs1(),
+    }
+}
+
+fn fmv_w_x(word: Word) -> Instruction {
+    Instruction::FpMoveFromInt {
+        rd: word.rd(),
+        rs1: word.rs1(),
     }
 }
 

@@ -17,7 +17,7 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Reset value of GPRs and CSRs | All zero | Decided |
 | IALIGN | 16; Zca provides compressed instructions, so branch and jump targets need only be two-byte aligned | Decided |
 | Behaviour on a misaligned instruction address | Raise an instruction-address-misaligned exception when the PC or control-transfer target is not two-byte aligned | Decided |
-| `misa` | WARL RV64IMACU: `MXL = 2`, with A, C, I, M, and U fixed; writes are accepted and ignored | Decided |
+| `misa` | WARL RV64IMAFCU: `MXL = 2`, with A, C, F, I, M, and U fixed; writes are accepted and ignored | Decided |
 | `mvendorid`, `marchid`, `mimpid` | Read-only zero | Decided |
 | Physical address width | Registers are 64-bit; the implemented physical space is the single DRAM region below | Decided |
 
@@ -47,13 +47,23 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; the profile allows `PAUSE` to execute as a NOP | Open |
 | Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
 
-## 4. Debug
+## 4. Floating point
+
+| Choice the spec leaves open | Ours | Status |
+|---|---|---|
+| F register width and representation | 32 FPRs stored as 64-bit architectural bits; single-precision values are NaN-boxed | Decided |
+| F rounding and flags | Project-owned integer-backed operations implement all five rounding modes and all five IEEE flags | Decided |
+| Tininess and NaN policy | Spike-compatible tininess detection and canonical NaN results | Decided |
+| F CSR visibility | `fflags`, `frm`, and `fcsr` are U-accessible only while `mstatus.FS` is enabled | Decided |
+| `mstatus.FS` dirty updates | Precise updates whenever an FP instruction changes FPR or FCSR state | Decided |
+
+## 5. Debug
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
 | Debug module and its debug-spec parameters (trigger count, DMI run-test/idle cycles, abstract-command timeouts) | Not implemented | Open |
 
-## 5. Choices the profile names explicitly
+## 6. Choices the profile names explicitly
 
 Same rows as section 4 of `rva22s64-implementation-choices.md`, with our answer:
 
@@ -68,7 +78,7 @@ Same rows as section 4 of `rva22s64-implementation-choices.md`, with our answer:
 | Debug | Not implemented — Open |
 | Multi-hart topology | Single hart — Decided for now |
 
-## 6. Execution-environment interface
+## 7. Execution-environment interface
 
 The spec leaves `ecall` and the surrounding ABI to the execution environment:
 
@@ -79,7 +89,7 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 | Halt and exit signalling | Halt self-loop, `jal x0, 0`; `ecall` enters the machine trap handler | Decided (temporary) |
 | Host I/O | Production host I/O remains absent. Compliance harnesses detect test-only `tohost` PASS/FAIL stores | Decided for tests |
 
-## 7. Optional extensions
+## 8. Optional extensions
 
 `Zfh`, `V`, `Zkn`, `Zks`, `Sv48`, `Sv57`, `Svnapot`, `Ssu64xl`, `Sstc`,
 `Sscofpmf`, `Zkr`, and `H` (augmented) are still **Undecided** in the profile

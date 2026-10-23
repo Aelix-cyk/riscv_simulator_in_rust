@@ -1,8 +1,8 @@
-name: arvsr-rv64imac
+name: arvsr-rv64imaf
 compiler_exe: riscv64-unknown-elf-gcc
 objdump_exe: riscv64-unknown-elf-objdump
 ref_model_exe: spike
-udb_config: arvsr-rv64imac.yaml
+udb_config: arvsr-rv64imaf.yaml
 linker_script: link.ld
 dut_include_dir: .
 include_priv_tests: true

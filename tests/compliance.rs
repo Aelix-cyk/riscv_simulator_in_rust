@@ -11,7 +11,7 @@ use std::process::Command;
 
 use compliance::{GateReport, expected_failures, required_dir, run_checked, run_elf};
 
-const LEGACY_FAMILIES: [&str; 5] = ["rv64ui", "rv64um", "rv64ua", "rv64uc", "rv64mi"];
+const LEGACY_FAMILIES: [&str; 6] = ["rv64ui", "rv64um", "rv64ua", "rv64uc", "rv64mi", "rv64uf"];
 
 #[test]
 #[ignore = "requires RISCV_TESTS_DIR and runs the external riscv-tests suite"]
@@ -60,7 +60,7 @@ fn act4_gate() {
     }
     run_checked(act.current_dir(&root));
 
-    let elf_root = workdir.join("arvsr-rv64imac").join("elfs");
+    let elf_root = workdir.join("arvsr-rv64imaf").join("elfs");
     let mut elfs = Vec::new();
     collect_elfs(&elf_root, &mut elfs);
     elfs.sort();

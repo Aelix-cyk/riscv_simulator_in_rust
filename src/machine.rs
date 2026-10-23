@@ -2,7 +2,10 @@
 
 use crate::bus::Bus;
 use crate::cpu::{Cpu, PrivilegeMode, X0};
-use crate::decode::{DecodedInstruction, Instruction, decode_word, is_compressed};
+use crate::decode::{
+    DecodedInstruction, FpBinaryOp, FpCompareOp, FpFusedOp, Instruction, decode_word, is_compressed,
+};
+use crate::fp::{self, RoundingMode};
 use crate::inst;
 use crate::trap::Trap;
 
@@ -12,6 +15,10 @@ const HALFWORD_BITS: u32 = 16;
 const EMPTY_INSTRUCTION_BITS: u32 = 0;
 const RESERVATION_BYTES: u64 = 8;
 const RESERVATION_ALIGNMENT_MASK: u64 = !(RESERVATION_BYTES - 1);
+const WORD_BITS: u32 = 32;
+const DYNAMIC_ROUNDING: u8 = 7;
+const FLOAT_BITS_MASK: u64 = (1 << WORD_BITS) - 1;
+const NAN_BOX: u64 = FLOAT_BITS_MASK << WORD_BITS;
 
 /// A synchronous exception ready for architectural trap delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,6 +341,142 @@ impl<B: Bus> Machine<B> {
             Instruction::Sraw { rd, rs1, rs2 } => {
                 let value = ((self.gpr(rs1) as u32) as i32) >> shift_32(self.gpr(rs2));
                 self.write(rd, sign_extend_32(u64::from(value as u32)));
+            }
+            Instruction::Flw { rd, rs1, offset } => {
+                self.require_fp_enabled(word)?;
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self
+                    .bus
+                    .read_u32(address)
+                    .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+                self.write_f32(rd, value);
+            }
+            Instruction::Fsw { rs2, rs1, offset } => {
+                self.require_fp_enabled(word)?;
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self.read_fpr(rs2) as u32;
+                self.bus
+                    .write_u32(address, value)
+                    .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                self.invalidate_reservation(address, 4);
+            }
+            Instruction::FpBinary {
+                op,
+                rd,
+                rs1,
+                rs2,
+                rounding,
+            } => {
+                self.require_fp_enabled(word)?;
+                let a = self.read_f32(rs1);
+                let b = self.read_f32(rs2);
+                match op {
+                    FpBinaryOp::Add | FpBinaryOp::Sub | FpBinaryOp::Mul | FpBinaryOp::Div => {
+                        let mode = self.rounding_mode(rounding, word)?;
+                        let result = match op {
+                            FpBinaryOp::Add => fp::add(a, b, mode),
+                            FpBinaryOp::Sub => fp::sub(a, b, mode),
+                            FpBinaryOp::Mul => fp::mul(a, b, mode),
+                            FpBinaryOp::Div => fp::div(a, b, mode),
+                            _ => unreachable!(),
+                        };
+                        self.write_fp_result(rd, result);
+                    }
+                    FpBinaryOp::SignInject => {
+                        self.write_f32(rd, (a & !fp::SIGN_MASK) | (b & fp::SIGN_MASK));
+                    }
+                    FpBinaryOp::SignInjectNegated => {
+                        self.write_f32(
+                            rd,
+                            (a & !fp::SIGN_MASK) | ((b ^ fp::SIGN_MASK) & fp::SIGN_MASK),
+                        );
+                    }
+                    FpBinaryOp::SignInjectXor => {
+                        self.write_f32(rd, (a & !fp::SIGN_MASK) | ((a ^ b) & fp::SIGN_MASK));
+                    }
+                    FpBinaryOp::Min => self.write_fp_result(rd, fp::min(a, b)),
+                    FpBinaryOp::Max => self.write_fp_result(rd, fp::max(a, b)),
+                }
+            }
+            Instruction::FpSqrt { rd, rs1, rounding } => {
+                self.require_fp_enabled(word)?;
+                let mode = self.rounding_mode(rounding, word)?;
+                self.write_fp_result(rd, fp::sqrt(self.read_f32(rs1), mode));
+            }
+            Instruction::FpFused {
+                op,
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rounding,
+            } => {
+                self.require_fp_enabled(word)?;
+                let mode = self.rounding_mode(rounding, word)?;
+                let (negate_product, negate_addend) = match op {
+                    FpFusedOp::Madd => (false, false),
+                    FpFusedOp::Msub => (false, true),
+                    FpFusedOp::Nmsub => (true, false),
+                    FpFusedOp::Nmadd => (true, true),
+                };
+                let result = fp::fma(
+                    self.read_f32(rs1),
+                    self.read_f32(rs2),
+                    self.read_f32(rs3),
+                    mode,
+                    negate_product,
+                    negate_addend,
+                );
+                self.write_fp_result(rd, result);
+            }
+            Instruction::FpCompare { op, rd, rs1, rs2 } => {
+                self.require_fp_enabled(word)?;
+                let comparison = match op {
+                    FpCompareOp::Equal => fp::Compare::Equal,
+                    FpCompareOp::Less => fp::Compare::Less,
+                    FpCompareOp::LessEqual => fp::Compare::LessEqual,
+                };
+                let (result, flags) =
+                    fp::compare(self.read_f32(rs1), self.read_f32(rs2), comparison);
+                self.write_fp_flags(flags);
+                self.write(rd, u64::from(result == Some(true)));
+            }
+            Instruction::FpClass { rd, rs1 } => {
+                self.require_fp_enabled(word)?;
+                self.write(rd, u64::from(fp::classify_bits(self.read_f32(rs1))));
+            }
+            Instruction::FpToInt {
+                rd,
+                rs1,
+                width,
+                unsigned,
+                rounding,
+            } => {
+                self.require_fp_enabled(word)?;
+                let mode = self.rounding_mode(rounding, word)?;
+                let result = fp::to_int(self.read_f32(rs1), width, unsigned, mode);
+                self.write_fp_flags(result.flags);
+                self.write(rd, result.value);
+            }
+            Instruction::IntToFp {
+                rd,
+                rs1,
+                width,
+                unsigned,
+                rounding,
+            } => {
+                self.require_fp_enabled(word)?;
+                let mode = self.rounding_mode(rounding, word)?;
+                let result = fp::from_int(self.gpr(rs1), width, unsigned, mode);
+                self.write_fp_result(rd, result);
+            }
+            Instruction::FpMoveToInt { rd, rs1 } => {
+                self.require_fp_enabled(word)?;
+                self.write(rd, sign_extend_32(self.read_fpr(rs1)));
+            }
+            Instruction::FpMoveFromInt { rd, rs1 } => {
+                self.require_fp_enabled(word)?;
+                self.write_f32(rd, self.gpr(rs1) as u32);
             }
             Instruction::Mul { rd, rs1, rs2 } => {
                 self.write(rd, self.gpr(rs1).wrapping_mul(self.gpr(rs2)));
@@ -842,6 +985,76 @@ impl<B: Bus> Machine<B> {
         Ok(target)
     }
 
+    /// Requires `mstatus.FS` to enable floating-point state.
+    fn require_fp_enabled(&self, word: u32) -> Result<(), Exception> {
+        if self.cpu.fp_enabled() {
+            Ok(())
+        } else {
+            Err(Exception::new(
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                u64::from(word),
+            ))
+        }
+    }
+
+    /// Reads an FPR, converting an unboxed value to the canonical NaN.
+    fn read_f32(&self, index: u8) -> u32 {
+        let value = self.read_fpr(index);
+        if value >> WORD_BITS == u64::from(u32::MAX) {
+            value as u32
+        } else {
+            fp::CANONICAL_NAN
+        }
+    }
+
+    /// Reads the architectural bits of an FPR.
+    fn read_fpr(&self, index: u8) -> u64 {
+        self.cpu.read_fpr(usize::from(index))
+    }
+
+    /// Writes a single-precision value with architectural NaN boxing.
+    fn write_f32(&mut self, index: u8, value: u32) {
+        self.cpu
+            .write_fpr(usize::from(index), NAN_BOX | u64::from(value));
+    }
+
+    /// Writes a result to an FPR and accumulates any raised flags.
+    fn write_fp_result(&mut self, index: u8, result: fp::FpResult) {
+        self.write_f32(index, result.bits);
+        self.write_fp_flags(result.flags);
+    }
+
+    /// Accumulates newly raised IEEE exception flags.
+    fn write_fp_flags(&mut self, flags: u8) {
+        if flags == 0 {
+            return;
+        }
+        let current = self
+            .cpu
+            .read_csr(inst::CSR_FCSR)
+            .expect("F instructions require enabled FCSR access");
+        assert!(
+            self.cpu
+                .write_csr(inst::CSR_FCSR, current | u64::from(flags))
+        );
+    }
+
+    /// Resolves the static or dynamic rounding field for an FP instruction.
+    fn rounding_mode(&self, encoded: u8, word: u32) -> Result<RoundingMode, Exception> {
+        let value = if encoded == DYNAMIC_ROUNDING {
+            self.cpu.read_csr(inst::CSR_FRM).ok_or(Exception::new(
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                u64::from(word),
+            ))? as u8
+        } else {
+            encoded
+        };
+        RoundingMode::from_bits(value).ok_or(Exception::new(
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(word),
+        ))
+    }
+
     /// Writes `value` to general-purpose register `rd`; `x0` discards it.
     fn write(&mut self, rd: u8, value: u64) {
         self.cpu.write_gpr(usize::from(rd), value);
@@ -952,6 +1165,12 @@ mod tests {
     const COUNTER_RELOAD_VALUE: u64 = 5;
     const COUNTER_CY_ENABLE: u64 = 1;
     const CYCLE_RELOAD_VALUE: u64 = 42;
+    const FP_INITIAL_STATUS: u64 = 1 << 13;
+    const FP_DIRTY_STATUS: u64 = 0b11 << 13;
+    const FADD_FT2_FT0_FT1: u32 = 0x0010_7153;
+    const BOXED_ONE: u64 = 0xffff_ffff_3f80_0000;
+    const BOXED_TWO: u64 = 0xffff_ffff_4000_0000;
+    const INVALID_ROUNDING_MODE: u64 = 5;
 
     struct WriteFaultBus(Memory);
 
@@ -1005,6 +1224,81 @@ mod tests {
 
         assert_eq!(machine.cpu().read_gpr(5), 42);
         assert_eq!(machine.cpu().pc(), 4);
+    }
+
+    #[test]
+    fn floating_point_instruction_traps_when_fs_is_off() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine
+            .bus_mut()
+            .write_u32(DRAM_BASE, FADD_FT2_FT0_FT1)
+            .unwrap();
+
+        machine.step(StepOptions::default());
+
+        assert_trap(
+            &machine,
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(FADD_FT2_FT0_FT1),
+            DRAM_BASE,
+        );
+    }
+
+    #[test]
+    fn enabled_floating_point_arithmetic_boxes_results_and_marks_fs_dirty() {
+        let mut machine = machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+        );
+        machine.cpu_mut().write_fpr(0, BOXED_ONE);
+        machine.cpu_mut().write_fpr(1, BOXED_ONE);
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+        );
+
+        machine.execute(Instruction::FpBinary {
+            op: FpBinaryOp::Add,
+            rd: 2,
+            rs1: 0,
+            rs2: 1,
+            rounding: 0,
+        });
+
+        assert_eq!(machine.cpu().read_fpr(2), BOXED_TWO);
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MSTATUS).unwrap() & FP_DIRTY_STATUS,
+            FP_DIRTY_STATUS
+        );
+    }
+
+    #[test]
+    fn invalid_dynamic_rounding_mode_is_illegal() {
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_FRM, INVALID_ROUNDING_MODE)
+        );
+
+        machine.execute(Instruction::FpBinary {
+            op: FpBinaryOp::Add,
+            rd: 2,
+            rs1: 0,
+            rs2: 1,
+            rounding: DYNAMIC_ROUNDING,
+        });
+
+        assert_trap(&machine, inst::CAUSE_ILLEGAL_INSTRUCTION, 0, 0);
     }
 
     #[test]
@@ -2108,7 +2402,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64imacu_and_ignores_warl_writes() {
+    fn misa_reports_rv64imafcu_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -2118,6 +2412,7 @@ mod tests {
         let misa = machine.cpu().read_gpr(5);
         assert_eq!(misa >> 62, 2, "MXL");
         assert_ne!(misa & 1, 0, "A extension");
+        assert_ne!(misa & (1 << 5), 0, "F extension");
         assert_ne!(misa & (1 << 8), 0, "I extension");
         assert_ne!(misa & (1 << 12), 0, "M extension");
 

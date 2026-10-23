@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use crate::cpu::{RA, SP, abi_name};
+use crate::cpu::{RA, SP, abi_name, fpr_abi_name};
 use crate::inst;
 use crate::opcodes;
 use crate::trap::Trap;
@@ -10,6 +10,7 @@ use crate::trap::Trap;
 const COMPRESSED_INSTRUCTION_BYTES: u64 = 2;
 const STANDARD_INSTRUCTION_BYTES: u64 = 4;
 const XLEN: u32 = 64;
+const WORD_BITS: u32 = 32;
 const REGISTER_BITS: u32 = 5;
 const PRIME_REGISTER_BITS: u32 = 3;
 const SINGLE_BIT_WIDTH: u32 = 1;
@@ -87,6 +88,9 @@ const STANDARD_AQ_SHIFT: u32 = 26;
 const STANDARD_RL_SHIFT: u32 = 25;
 const STANDARD_CSR_SHIFT: u32 = 20;
 const STANDARD_CSR_BITS: u32 = 12;
+const STANDARD_RS3_SHIFT: u32 = 27;
+const STANDARD_ROUNDING_SHIFT: u32 = 12;
+const STANDARD_ROUNDING_BITS: u32 = 3;
 const STANDARD_FENCE_PRED_SHIFT: u32 = 24;
 const STANDARD_FENCE_SUCC_SHIFT: u32 = 20;
 const STANDARD_FENCE_BITS: u32 = 4;
@@ -290,6 +294,60 @@ pub enum Instruction {
     Srlw { rd: u8, rs1: u8, rs2: u8 },
     /// `sraw rd, rs1, rs2`
     Sraw { rd: u8, rs1: u8, rs2: u8 },
+
+    // F-extension memory and arithmetic operations.
+    /// `flw rd, offset(rs1)`
+    Flw { rd: u8, rs1: u8, offset: i64 },
+    /// `fsw rs2, offset(rs1)`
+    Fsw { rs2: u8, rs1: u8, offset: i64 },
+    /// A binary F operation.
+    FpBinary {
+        op: FpBinaryOp,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        rounding: u8,
+    },
+    /// `fsqrt.s rd,rs1`
+    FpSqrt { rd: u8, rs1: u8, rounding: u8 },
+    /// A fused F multiply-add-family operation.
+    FpFused {
+        op: FpFusedOp,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        rs3: u8,
+        rounding: u8,
+    },
+    /// A floating-point comparison producing an integer result.
+    FpCompare {
+        op: FpCompareOp,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+    },
+    /// `fclass.s rd,rs1`
+    FpClass { rd: u8, rs1: u8 },
+    /// A float-to-integer conversion.
+    FpToInt {
+        rd: u8,
+        rs1: u8,
+        width: u32,
+        unsigned: bool,
+        rounding: u8,
+    },
+    /// An integer-to-float conversion.
+    IntToFp {
+        rd: u8,
+        rs1: u8,
+        width: u32,
+        unsigned: bool,
+        rounding: u8,
+    },
+    /// `fmv.x.w rd,rs1`
+    FpMoveToInt { rd: u8, rs1: u8 },
+    /// `fmv.w.x rd,rs1`
+    FpMoveFromInt { rd: u8, rs1: u8 },
 
     // M-extension multiplication.
     /// `mul rd, rs1, rs2`
@@ -564,6 +622,37 @@ pub enum Instruction {
     Bgeu { rs1: u8, rs2: u8, offset: i64 },
     /// `jal rd, offset` — offset is relative to the instruction address.
     Jal { rd: u8, offset: i64 },
+}
+
+/// Binary operations encoded by the F opcode space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FpBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    SignInject,
+    SignInjectNegated,
+    SignInjectXor,
+    Min,
+    Max,
+}
+
+/// Fused multiply-add-family operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FpFusedOp {
+    Madd,
+    Msub,
+    Nmsub,
+    Nmadd,
+}
+
+/// Floating-point comparison operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FpCompareOp {
+    Equal,
+    Less,
+    LessEqual,
 }
 
 /// A decoded instruction plus the encoding that produced it.
@@ -1375,6 +1464,40 @@ impl Instruction {
             Instruction::Sllw { .. } => "sllw",
             Instruction::Srlw { .. } => "srlw",
             Instruction::Sraw { .. } => "sraw",
+            Instruction::Flw { .. } => "flw",
+            Instruction::Fsw { .. } => "fsw",
+            Instruction::FpBinary { op, .. } => match op {
+                FpBinaryOp::Add => "fadd.s",
+                FpBinaryOp::Sub => "fsub.s",
+                FpBinaryOp::Mul => "fmul.s",
+                FpBinaryOp::Div => "fdiv.s",
+                FpBinaryOp::SignInject => "fsgnj.s",
+                FpBinaryOp::SignInjectNegated => "fsgnjn.s",
+                FpBinaryOp::SignInjectXor => "fsgnjx.s",
+                FpBinaryOp::Min => "fmin.s",
+                FpBinaryOp::Max => "fmax.s",
+            },
+            Instruction::FpSqrt { .. } => "fsqrt.s",
+            Instruction::FpFused { op, .. } => match op {
+                FpFusedOp::Madd => "fmadd.s",
+                FpFusedOp::Msub => "fmsub.s",
+                FpFusedOp::Nmsub => "fnmsub.s",
+                FpFusedOp::Nmadd => "fnmadd.s",
+            },
+            Instruction::FpCompare { op, .. } => match op {
+                FpCompareOp::Equal => "feq.s",
+                FpCompareOp::Less => "flt.s",
+                FpCompareOp::LessEqual => "fle.s",
+            },
+            Instruction::FpClass { .. } => "fclass.s",
+            Instruction::FpToInt {
+                width, unsigned, ..
+            } => to_int_mnemonic(width, unsigned),
+            Instruction::IntToFp {
+                width, unsigned, ..
+            } => from_int_mnemonic(width, unsigned),
+            Instruction::FpMoveToInt { .. } => "fmv.x.w",
+            Instruction::FpMoveFromInt { .. } => "fmv.w.x",
             Instruction::Mul { .. } => "mul",
             Instruction::Mulh { .. } => "mulh",
             Instruction::Mulhsu { .. } => "mulhsu",
@@ -1477,6 +1600,69 @@ impl Instruction {
             Instruction::Sllw { rd, rs1, rs2 } => reg_op("sllw", rd, rs1, rs2),
             Instruction::Srlw { rd, rs1, rs2 } => reg_op("srlw", rd, rs1, rs2),
             Instruction::Sraw { rd, rs1, rs2 } => reg_op("sraw", rd, rs1, rs2),
+            Instruction::Flw { rd, rs1, offset } => fp_load_op("flw", rd, rs1, offset),
+            Instruction::Fsw { rs2, rs1, offset } => fp_store_op("fsw", rs2, rs1, offset),
+            Instruction::FpBinary {
+                op, rd, rs1, rs2, ..
+            } => fp_reg_op(fp_binary_mnemonic(op), rd, rs1, rs2),
+            Instruction::FpSqrt { rd, rs1, .. } => {
+                format!("fsqrt.s {},{}", fpr_abi_name(rd), fpr_abi_name(rs1))
+            }
+            Instruction::FpFused {
+                op,
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                ..
+            } => format!(
+                "{} {},{},{},{}",
+                fp_fused_mnemonic(op),
+                fpr_abi_name(rd),
+                fpr_abi_name(rs1),
+                fpr_abi_name(rs2),
+                fpr_abi_name(rs3)
+            ),
+            Instruction::FpCompare { op, rd, rs1, rs2 } => format!(
+                "{} {},{},{}",
+                fp_compare_mnemonic(op),
+                abi_name(rd),
+                fpr_abi_name(rs1),
+                fpr_abi_name(rs2),
+            ),
+            Instruction::FpClass { rd, rs1 } => {
+                format!("fclass.s {},{}", abi_name(rd), fpr_abi_name(rs1))
+            }
+            Instruction::FpToInt {
+                rd,
+                rs1,
+                width,
+                unsigned,
+                ..
+            } => format!(
+                "{} {},{}",
+                to_int_mnemonic(width, unsigned),
+                abi_name(rd),
+                fpr_abi_name(rs1)
+            ),
+            Instruction::IntToFp {
+                rd,
+                rs1,
+                width,
+                unsigned,
+                ..
+            } => format!(
+                "{} {},{}",
+                from_int_mnemonic(width, unsigned),
+                fpr_abi_name(rd),
+                abi_name(rs1)
+            ),
+            Instruction::FpMoveToInt { rd, rs1 } => {
+                format!("fmv.x.w {},{}", abi_name(rd), fpr_abi_name(rs1))
+            }
+            Instruction::FpMoveFromInt { rd, rs1 } => {
+                format!("fmv.w.x {},{}", fpr_abi_name(rd), abi_name(rs1))
+            }
             Instruction::Mul { rd, rs1, rs2 } => reg_op("mul", rd, rs1, rs2),
             Instruction::Mulh { rd, rs1, rs2 } => reg_op("mulh", rd, rs1, rs2),
             Instruction::Mulhsu { rd, rs1, rs2 } => reg_op("mulhsu", rd, rs1, rs2),
@@ -1707,6 +1893,85 @@ fn imm_op(mnemonic: &str, rd: u8, rs1: u8, imm: i64) -> String {
     format!("{mnemonic} {},{},{imm}", abi_name(rd), abi_name(rs1))
 }
 
+fn fp_binary_mnemonic(op: FpBinaryOp) -> &'static str {
+    match op {
+        FpBinaryOp::Add => "fadd.s",
+        FpBinaryOp::Sub => "fsub.s",
+        FpBinaryOp::Mul => "fmul.s",
+        FpBinaryOp::Div => "fdiv.s",
+        FpBinaryOp::SignInject => "fsgnj.s",
+        FpBinaryOp::SignInjectNegated => "fsgnjn.s",
+        FpBinaryOp::SignInjectXor => "fsgnjx.s",
+        FpBinaryOp::Min => "fmin.s",
+        FpBinaryOp::Max => "fmax.s",
+    }
+}
+
+fn fp_fused_mnemonic(op: FpFusedOp) -> &'static str {
+    match op {
+        FpFusedOp::Madd => "fmadd.s",
+        FpFusedOp::Msub => "fmsub.s",
+        FpFusedOp::Nmsub => "fnmsub.s",
+        FpFusedOp::Nmadd => "fnmadd.s",
+    }
+}
+
+fn fp_compare_mnemonic(op: FpCompareOp) -> &'static str {
+    match op {
+        FpCompareOp::Equal => "feq.s",
+        FpCompareOp::Less => "flt.s",
+        FpCompareOp::LessEqual => "fle.s",
+    }
+}
+
+fn to_int_mnemonic(width: u32, unsigned: bool) -> &'static str {
+    match (width, unsigned) {
+        (WORD_BITS, false) => "fcvt.w.s",
+        (WORD_BITS, true) => "fcvt.wu.s",
+        (XLEN, false) => "fcvt.l.s",
+        (XLEN, true) => "fcvt.lu.s",
+        _ => unreachable!("F only converts 32- and 64-bit integers"),
+    }
+}
+
+fn from_int_mnemonic(width: u32, unsigned: bool) -> &'static str {
+    match (width, unsigned) {
+        (WORD_BITS, false) => "fcvt.s.w",
+        (WORD_BITS, true) => "fcvt.s.wu",
+        (XLEN, false) => "fcvt.s.l",
+        (XLEN, true) => "fcvt.s.lu",
+        _ => unreachable!("F only converts 32- and 64-bit integers"),
+    }
+}
+
+/// `mnemonic fd,fs1,fs2`
+fn fp_reg_op(mnemonic: &str, rd: u8, rs1: u8, rs2: u8) -> String {
+    format!(
+        "{mnemonic} {},{},{}",
+        fpr_abi_name(rd),
+        fpr_abi_name(rs1),
+        fpr_abi_name(rs2)
+    )
+}
+
+/// `mnemonic fd,offset(rs1)`
+fn fp_load_op(mnemonic: &str, rd: u8, rs1: u8, offset: i64) -> String {
+    format!(
+        "{mnemonic} {},{offset}({})",
+        fpr_abi_name(rd),
+        abi_name(rs1)
+    )
+}
+
+/// `mnemonic fs2,offset(rs1)`
+fn fp_store_op(mnemonic: &str, rs2: u8, rs1: u8, offset: i64) -> String {
+    format!(
+        "{mnemonic} {},{offset}({})",
+        fpr_abi_name(rs2),
+        abi_name(rs1)
+    )
+}
+
 /// `mnemonic rd,rs1,shamt`
 fn shamt_op(mnemonic: &str, rd: u8, rs1: u8, shamt: u8) -> String {
     format!("{mnemonic} {},{},{shamt:#x}", abi_name(rd), abi_name(rs1))
@@ -1788,6 +2053,9 @@ fn csr_name(csr: u16) -> String {
         inst::CSR_MEPC => "mepc".to_owned(),
         inst::CSR_MCAUSE => "mcause".to_owned(),
         inst::CSR_MTVAL => "mtval".to_owned(),
+        inst::CSR_FFLAGS => "fflags".to_owned(),
+        inst::CSR_FRM => "frm".to_owned(),
+        inst::CSR_FCSR => "fcsr".to_owned(),
         _ => format!("{csr:#x}"),
     }
 }
@@ -1895,6 +2163,16 @@ impl Word {
     /// Second source register, bits 24:20.
     pub(crate) fn rs2(self) -> u8 {
         self.bits(STANDARD_RS2_SHIFT, REGISTER_BITS) as u8
+    }
+
+    /// Third floating-point source register, bits 31:27.
+    pub(crate) fn rs3(self) -> u8 {
+        self.bits(STANDARD_RS3_SHIFT, REGISTER_BITS) as u8
+    }
+
+    /// Static rounding-mode field, bits 14:12.
+    pub(crate) fn rounding(self) -> u8 {
+        self.bits(STANDARD_ROUNDING_SHIFT, STANDARD_ROUNDING_BITS) as u8
     }
 
     /// Acquire-ordering bit, bit 26.

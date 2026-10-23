@@ -13,18 +13,24 @@ const MSTATUS_MIE: u64 = 1 << 3;
 const MSTATUS_MPIE: u64 = 1 << 7;
 const MSTATUS_MPP_SHIFT: u32 = 11;
 const MSTATUS_MPP_MASK: u64 = 0b11 << MSTATUS_MPP_SHIFT;
-const MSTATUS_WRITABLE: u64 = MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP_MASK;
+const MSTATUS_FS_SHIFT: u32 = 13;
+const MSTATUS_FS_MASK: u64 = 0b11 << MSTATUS_FS_SHIFT;
+const MSTATUS_FS_DIRTY: u64 = 0b11 << MSTATUS_FS_SHIFT;
+const MSTATUS_SD: u64 = 1 << 63;
+const MSTATUS_WRITABLE: u64 = MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP_MASK | MSTATUS_FS_MASK;
 const MSTATUS_FIXED: u64 = MSTATUS_UXL;
 const MXL_SHIFT: u32 = 62;
 const MXL_64: u64 = 2;
 const MISA_EXT_A_SHIFT: u32 = 0;
 const MISA_EXT_C_SHIFT: u32 = 2;
+const MISA_EXT_F_SHIFT: u32 = 5;
 const MISA_EXT_I_SHIFT: u32 = 8;
 const MISA_EXT_M_SHIFT: u32 = 12;
 const MISA_EXT_U_SHIFT: u32 = 20;
 const MISA_VALUE: u64 = (MXL_64 << MXL_SHIFT)
     | (1 << MISA_EXT_A_SHIFT)
     | (1 << MISA_EXT_C_SHIFT)
+    | (1 << MISA_EXT_F_SHIFT)
     | (1 << MISA_EXT_I_SHIFT)
     | (1 << MISA_EXT_M_SHIFT)
     | (1 << MISA_EXT_U_SHIFT);
@@ -42,6 +48,13 @@ const COUNTER_ENABLE_MASK: u64 = COUNTER_CY_BIT | COUNTER_TM_BIT | COUNTER_IR_BI
 const MCOUNTINHIBIT_CY_BIT: u64 = 1 << 0;
 const MCOUNTINHIBIT_IR_BIT: u64 = 1 << 2;
 const MCOUNTINHIBIT_MASK: u64 = MCOUNTINHIBIT_CY_BIT | MCOUNTINHIBIT_IR_BIT;
+const FFLAGS_BITS: u32 = 5;
+const FFLAGS_MASK: u64 = (1 << FFLAGS_BITS) - 1;
+const FRM_SHIFT: u32 = FFLAGS_BITS;
+const FRM_BITS: u32 = 3;
+const FRM_VALUE_MASK: u64 = (1 << FRM_BITS) - 1;
+const FRM_MASK: u64 = FRM_VALUE_MASK << FRM_SHIFT;
+const FCSR_MASK: u64 = FFLAGS_MASK | FRM_MASK;
 
 /// Architectural machine-mode CSR state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,6 +76,7 @@ pub(crate) struct Csrs {
     mcountinhibit: u64,
     mcycle: u64,
     minstret: u64,
+    fcsr: u64,
 }
 
 impl Csrs {
@@ -78,7 +92,7 @@ impl Csrs {
             return None;
         }
         match address {
-            inst::CSR_MSTATUS => Some(self.mstatus | MSTATUS_FIXED),
+            inst::CSR_MSTATUS => Some(self.mstatus_value()),
             inst::CSR_MISA => Some(MISA_VALUE),
             inst::CSR_MHARTID => Some(0),
             inst::CSR_MVENDORID | inst::CSR_MARCHID | inst::CSR_MIMPID => Some(0),
@@ -102,6 +116,9 @@ impl Csrs {
             inst::CSR_INSTRET => Some(self.minstret),
             inst::CSR_MCYCLE => Some(self.mcycle),
             inst::CSR_MINSTRET => Some(self.minstret),
+            inst::CSR_FFLAGS => Some(self.fcsr & FFLAGS_MASK),
+            inst::CSR_FRM => Some((self.fcsr & FRM_MASK) >> FRM_SHIFT),
+            inst::CSR_FCSR => Some(self.fcsr),
             _ => None,
         }
     }
@@ -119,6 +136,23 @@ impl Csrs {
         value: u64,
         privilege: PrivilegeMode,
     ) -> bool {
+        if matches!(address, inst::CSR_FFLAGS | inst::CSR_FRM | inst::CSR_FCSR) {
+            if !self.fp_enabled() {
+                return false;
+            }
+            match address {
+                inst::CSR_FFLAGS => {
+                    self.fcsr = (self.fcsr & !FFLAGS_MASK) | (value & FFLAGS_MASK);
+                }
+                inst::CSR_FRM => {
+                    self.fcsr = (self.fcsr & !FRM_MASK) | ((value & FRM_VALUE_MASK) << FRM_SHIFT);
+                }
+                inst::CSR_FCSR => self.fcsr = value & FCSR_MASK,
+                _ => unreachable!(),
+            }
+            self.mark_fp_dirty();
+            return true;
+        }
         if privilege != PrivilegeMode::Machine || Self::is_read_only(address) {
             return false;
         }
@@ -166,6 +200,7 @@ impl Csrs {
                 privilege == PrivilegeMode::Machine
                     || (privilege == PrivilegeMode::User && self.mcounteren & COUNTER_IR_BIT != 0)
             }
+            inst::CSR_FFLAGS | inst::CSR_FRM | inst::CSR_FCSR => self.fp_enabled(),
             _ => {
                 privilege == PrivilegeMode::Machine
                     && (address >> CSR_PRIVILEGE_SHIFT) & CSR_PRIVILEGE_MASK
@@ -176,6 +211,27 @@ impl Csrs {
 
     fn is_read_only(address: u16) -> bool {
         (address >> CSR_READ_ONLY_SHIFT) & CSR_READ_ONLY_MASK == CSR_READ_ONLY
+    }
+
+    /// Whether `mstatus.FS` enables floating-point register accesses.
+    pub(crate) fn fp_enabled(self) -> bool {
+        self.mstatus & MSTATUS_FS_MASK != 0
+    }
+
+    /// Marks floating-point register state dirty.
+    pub(crate) fn mark_fp_dirty(&mut self) {
+        if self.fp_enabled() {
+            self.mstatus = (self.mstatus & !MSTATUS_FS_MASK) | MSTATUS_FS_DIRTY;
+        }
+    }
+
+    fn mstatus_value(self) -> u64 {
+        let dirty = if self.mstatus & MSTATUS_FS_MASK == MSTATUS_FS_DIRTY {
+            MSTATUS_SD
+        } else {
+            0
+        };
+        self.mstatus | MSTATUS_FIXED | dirty
     }
 
     /// Advances the cycle counter unless software inhibits it.
@@ -265,7 +321,7 @@ mod tests {
 
         assert_eq!(
             csrs.read(inst::CSR_MSTATUS),
-            Some(MSTATUS_WRITABLE | MSTATUS_FIXED)
+            Some(MSTATUS_WRITABLE | MSTATUS_FIXED | MSTATUS_SD)
         );
         assert_eq!(csrs.read(inst::CSR_MTVEC), Some(MTVEC_ALIGNMENT_MASK));
         assert_eq!(csrs.read(inst::CSR_MEPC), Some(MEPC_ALIGNMENT_MASK));
@@ -291,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_is_a_fixed_rv64imacu_warl() {
+    fn misa_is_a_fixed_rv64imafcu_warl() {
         let mut csrs = Csrs::default();
 
         assert_eq!(csrs.read(inst::CSR_MISA), Some(MISA_VALUE));
@@ -363,5 +419,25 @@ mod tests {
 
         assert_eq!(csrs.read(inst::CSR_MCYCLE), Some(0));
         assert_eq!(csrs.read(inst::CSR_MINSTRET), Some(0));
+    }
+
+    #[test]
+    fn fcsr_aliases_require_enabled_state_and_set_fs_dirty() {
+        let mut csrs = Csrs::default();
+
+        assert!(!csrs.write(inst::CSR_FCSR, u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_FCSR), None);
+
+        assert!(csrs.write(inst::CSR_MSTATUS, 0b01 << MSTATUS_FS_SHIFT));
+        assert_eq!(csrs.read(inst::CSR_MSTATUS).unwrap() & MSTATUS_SD, 0);
+        assert!(csrs.write_with_privilege(inst::CSR_FFLAGS, 0x1f, PrivilegeMode::User));
+        assert!(csrs.write_with_privilege(inst::CSR_FRM, 0x5, PrivilegeMode::User));
+
+        assert_eq!(csrs.read(inst::CSR_FFLAGS), Some(0x1f));
+        assert_eq!(csrs.read(inst::CSR_FRM), Some(0x5));
+        assert_eq!(csrs.read(inst::CSR_FCSR), Some(0xbf));
+        let status = csrs.read(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(status & MSTATUS_FS_MASK, MSTATUS_FS_DIRTY);
+        assert_eq!(status & MSTATUS_SD, MSTATUS_SD);
     }
 }

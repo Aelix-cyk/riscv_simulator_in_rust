@@ -3,13 +3,14 @@
 $schema: config_schema.json#
 kind: architecture configuration
 type: fully configured
-name: arvsr-rv64imac
-description: aRVSR RV64IMAC machine-mode implementation with Zca
+name: arvsr-rv64imaf
+description: aRVSR RV64IMAF machine-mode implementation with Zca
 implemented_extensions:
   - { name: I, version: "= 2.1" }
   - { name: M, version: "= 2.0" }
   - { name: Zmmul, version: "= 1.0.0" }
   - { name: A, version: "= 2.1.0" }
+  - { name: F, version: "= 2.2" }
   - { name: C, version: "= 2.0" }
   - { name: Zicsr, version: "= 2.0" }
   - { name: Zifencei, version: "= 2.0.0" }
@@ -27,6 +28,9 @@ params:
   LRSC_FAIL_ON_NON_EXACT_LRSC: false
   MUTABLE_MISA_A: false
   MUTABLE_MISA_C: false
+  MUTABLE_MISA_F: false
+  HW_MSTATUS_FS_DIRTY_UPDATE: precise
+  MSTATUS_FS_LEGAL_VALUES: [0, 1, 2, 3]
   # M params
   MUTABLE_MISA_M: false
   # Sm params

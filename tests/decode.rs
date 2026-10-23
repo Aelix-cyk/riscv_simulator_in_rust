@@ -23,20 +23,17 @@ const UNIMPLEMENTED: [&str; 0] = [];
 #[test]
 fn decoder_mnemonics_match_objdump() {
     for fixture in FIXTURES {
-        check_fixture(fixture, false);
+        check_fixture(fixture, assemble::assemble);
     }
     for fixture in COMPRESSED_FIXTURES {
-        check_fixture(fixture, true);
+        check_fixture(fixture, assemble::assemble_compressed);
     }
+    check_fixture("f.S", assemble::assemble_float);
 }
 
 /// Decodes every instruction of a fixture and compares mnemonics with `objdump`.
-fn check_fixture(name: &str, compressed: bool) {
-    let program = if compressed {
-        assemble::assemble_compressed(name)
-    } else {
-        assemble::assemble(name)
-    };
+fn check_fixture(name: &str, assembler: fn(&str) -> assemble::Program) {
+    let program = assembler(name);
     let mut memory = Memory::with_size(program.binary.len());
     memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
 

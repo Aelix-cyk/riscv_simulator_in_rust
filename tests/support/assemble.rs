@@ -12,7 +12,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use riscv_simulator_in_rust::bus::Bus;
-use riscv_simulator_in_rust::cpu::{ABI_NAMES, GPR_COUNT};
+use riscv_simulator_in_rust::cpu::{ABI_NAMES, FPR_COUNT, GPR_COUNT};
 use riscv_simulator_in_rust::decode::is_compressed;
 
 /// Address fixtures are linked at and loaded into memory.
@@ -79,9 +79,13 @@ impl Program {
         let commands = self.work_dir.join("spike-debug.txt");
         let chunks = self.binary.len().div_ceil(8);
         let mut script = format!("until pc 0 {:#x}\nreg 0\n", self.halt_address());
+        for index in 0..FPR_COUNT {
+            script.push_str(&format!("freg 0 {index}\n"));
+        }
         for chunk in 0..chunks {
             script.push_str(&format!("mem 0 {:#x}\n", LOAD_ADDRESS + (chunk * 8) as u64));
         }
+        script.push_str("reg 0 fcsr\n");
         script.push_str("quit\n");
         fs::write(&commands, script).expect("write spike debug commands");
 
@@ -94,9 +98,13 @@ impl Program {
         // Spike writes debugger output to stderr, next to a `tohost` warning that
         // the parsers skip.
         let dump = String::from_utf8_lossy(&output.stderr);
+        let scalars: Vec<u64> = dump.lines().filter_map(parse_scalar_hex).collect();
+        let (floating_registers, memory, fcsr) = parse_float_state(&scalars, chunks);
         SpikeState {
             registers: parse_gpr_dump(&dump),
-            memory: parse_memory_dump(&dump, chunks),
+            floating_registers,
+            fcsr,
+            memory,
         }
     }
 }
@@ -105,6 +113,10 @@ impl Program {
 pub struct SpikeState {
     /// Final general-purpose register values.
     pub registers: [u64; GPR_COUNT],
+    /// Final floating-point register bit patterns.
+    pub floating_registers: [u64; FPR_COUNT],
+    /// Final floating-point control and status register.
+    pub fcsr: u64,
     /// Final memory contents from `LOAD_ADDRESS`, eight bytes per `mem` line.
     pub memory: Vec<u8>,
 }
@@ -123,6 +135,11 @@ pub fn assemble(name: &str) -> Program {
 /// Assembles a fixture with Zca enabled.
 pub fn assemble_compressed(name: &str) -> Program {
     assemble_with_march(name, "rv64imac_zifencei_zicsr")
+}
+
+/// Assembles a fixture with the single-precision F extension enabled.
+pub fn assemble_float(name: &str) -> Program {
+    assemble_with_march(name, "rv64imaf_zifencei_zicsr")
 }
 
 /// Assembles a fixture for a selected ISA string.
@@ -220,29 +237,31 @@ fn parse_gpr_dump(output: &str) -> [u64; GPR_COUNT] {
     registers
 }
 
-/// Reads spike's `mem` output: one 8-byte, little-endian hex word per chunk.
-fn parse_memory_dump(output: &str, chunks: usize) -> Vec<u8> {
+/// Reads the ordered `freg`, memory, and FCSR scalar values.
+fn parse_float_state(values: &[u64], chunks: usize) -> ([u64; FPR_COUNT], Vec<u8>, u64) {
+    let mut registers = [0; FPR_COUNT];
+    registers.copy_from_slice(&values[..FPR_COUNT]);
+    let memory_end = FPR_COUNT + chunks;
     let mut memory = Vec::with_capacity(chunks * 8);
-
-    for line in output.lines() {
-        let mut tokens = line.split_whitespace();
-        let Some(word) = tokens.next().and_then(|token| token.strip_prefix("0x")) else {
-            continue;
-        };
-        if tokens.next().is_some() || word.len() != 16 {
-            continue; // register dump lines carry a `name:` prefix
-        }
-        let value = u64::from_str_radix(word, 16).expect("hex memory word");
-        memory.extend_from_slice(&value.to_le_bytes());
+    for word in &values[FPR_COUNT..memory_end] {
+        memory.extend_from_slice(&word.to_le_bytes());
     }
+    let fcsr = values[memory_end];
+    (registers, memory, fcsr)
+}
 
-    assert_eq!(
-        memory.len(),
-        chunks * 8,
-        "spike printed {} memory words, expected {chunks}",
-        memory.len() / 8
-    );
-    memory
+/// Parses a one-token hexadecimal debugger value, retaining the low 64 bits.
+fn parse_scalar_hex(line: &str) -> Option<u64> {
+    let mut fields = line.split_whitespace();
+    let word = fields.next()?.strip_prefix("0x")?;
+    if fields.next().is_some()
+        || word.is_empty()
+        || !word.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let low = word.get(word.len().saturating_sub(16)..)?;
+    u64::from_str_radix(low, 16).ok()
 }
 
 /// Runs a command, panicking with its stderr when it fails.
