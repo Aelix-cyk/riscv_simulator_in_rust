@@ -51,11 +51,12 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| F register width and representation | 32 FPRs stored as 64-bit architectural bits; single-precision values are NaN-boxed | Decided |
-| F rounding and flags | Project-owned integer-backed operations implement all five rounding modes and all five IEEE flags | Decided |
+| F/D register width and representation | 32 FPRs store 64-bit architectural bits; single-precision values are NaN-boxed | Decided |
+| F/D rounding and flags | Project-owned integer-backed operations implement all five rounding modes and all five IEEE flags | Decided |
 | Tininess and NaN policy | Spike-compatible tininess detection and canonical NaN results | Decided |
 | F CSR visibility | `fflags`, `frm`, and `fcsr` are U-accessible only while `mstatus.FS` is enabled | Decided |
 | `mstatus.FS` dirty updates | Precise updates whenever an FP instruction changes FPR or FCSR state | Decided |
+| Compressed FP accesses | Zcd implements `c.fld`, `c.fsd`, `c.fldsp`, and `c.fsdsp` | Decided |
 
 ## 5. Debug
 

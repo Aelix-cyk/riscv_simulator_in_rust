@@ -29,6 +29,8 @@ fn decoder_mnemonics_match_objdump() {
         check_fixture(fixture, assemble::assemble_compressed);
     }
     check_fixture("f.S", assemble::assemble_float);
+    check_fixture("d.S", assemble::assemble_double);
+    check_fixture("compressed_d.S", assemble::assemble_double);
 }
 
 /// Decodes every instruction of a fixture and compares mnemonics with `objdump`.
@@ -80,8 +82,10 @@ fn canonical_mnemonic(mnemonic: &str) -> &str {
         "c.addw" => "addw",
         "c.lw" | "c.lwsp" => "lw",
         "c.ld" | "c.ldsp" => "ld",
+        "c.fld" | "c.fldsp" => "fld",
         "c.sw" | "c.swsp" => "sw",
         "c.sd" | "c.sdsp" => "sd",
+        "c.fsd" | "c.fsdsp" => "fsd",
         "c.mv" | "c.add" => "add",
         "c.j" => "jal",
         "c.jr" | "c.jalr" => "jalr",

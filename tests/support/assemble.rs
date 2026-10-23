@@ -142,6 +142,11 @@ pub fn assemble_float(name: &str) -> Program {
     assemble_with_march(name, "rv64imaf_zifencei_zicsr")
 }
 
+/// Assembles a fixture with single- and double-precision floating point enabled.
+pub fn assemble_double(name: &str) -> Program {
+    assemble_with_march(name, "rv64imafdc_zifencei_zicsr")
+}
+
 /// Assembles a fixture for a selected ISA string.
 fn assemble_with_march(name: &str, march: &str) -> Program {
     let work_dir = std::env::temp_dir().join(format!(

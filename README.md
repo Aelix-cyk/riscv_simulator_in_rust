@@ -4,14 +4,14 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 
 ## Status
 
-A 64-bit hart that executes RV64IMAFC with M/U privilege plus Zicsr and Zicntr —
+A 64-bit hart that executes RV64IMAFDC with M/U privilege plus Zicsr and Zicntr —
 the integer ALU operations, all integer multiply/divide and atomic instructions,
-single-precision floating point, Zca compressed instructions, branches, jumps,
-loads and stores,
+single- and double-precision floating point, Zca/Zcd compressed instructions,
+branches, jumps, loads and stores,
 `fence`/`fence.i`, the six CSR read/modify/write forms, and deterministic cycle,
 time, and instruction counters. Synchronous exceptions, including `ecall` and
 `ebreak`, enter a machine-mode handler through `mtvec`. Implemented CSRs include
-WARL `misa` (RV64IMAFCU), `fcsr`/`fflags`/`frm`, machine
+WARL `misa` (RV64IMAFDCU), `fcsr`/`fflags`/`frm`, machine
 identity/status/trap/delegation registers, and counter controls. The target
 profile is RVA22S64, built up progressively: see `GLOSSARY.md` for terminology,
 `docs/impl-choices/` for the requirements and the choices the specification
@@ -67,7 +67,7 @@ and generate many programs:
 ```sh
 export RISCV_TESTS_DIR="$HOME/tools/riscv-tests"
 export RISCV_ARCH_TEST_DIR="$HOME/tools/riscv-arch-test"
-export ACT4_EXTENSIONS=F      # optional target filter
+export ACT4_EXTENSIONS=D      # optional target filter
 cargo test --test compliance -- --ignored --nocapture
 ```
 
@@ -76,8 +76,8 @@ project-local ACT4 ELFs under `target/compliance/act4` by default. Known
 unsupported features and deferred bugs live in
 `tests/compliance/expected_failures.tsv`; listed passes or unlisted failures
 fail the gate. The legacy gate includes `rv64ui`, `rv64um`, `rv64ua`, `rv64uc`,
-`rv64mi`, and `rv64uf`; the ACT4 configuration covers F arithmetic, flags,
-rounding, conversions, and transfer instructions.
+`rv64mi`, `rv64uf`, and `rv64ud`; the ACT4 configuration covers F/D arithmetic,
+flags, rounding, conversions, and transfer instructions.
 
 ## Development tooling
 

@@ -3,9 +3,11 @@
 use crate::bus::Bus;
 use crate::cpu::{Cpu, PrivilegeMode, X0};
 use crate::decode::{
-    DecodedInstruction, FpBinaryOp, FpCompareOp, FpFusedOp, Instruction, decode_word, is_compressed,
+    DecodedInstruction, FpBinaryOp, FpCompareOp, FpFormat, FpFusedOp, Instruction, decode_word,
+    is_compressed,
 };
 use crate::fp::{self, RoundingMode};
+use crate::fp64;
 use crate::inst;
 use crate::trap::Trap;
 
@@ -68,6 +70,37 @@ pub enum RunOutcome {
 pub struct StepOptions {
     /// Print the original PC and decoded instruction before execution.
     pub trace: bool,
+}
+
+struct FpBinaryRequest {
+    format: FpFormat,
+    op: FpBinaryOp,
+    rd: u8,
+    rs1: u8,
+    rs2: u8,
+    rounding: u8,
+    word: u32,
+}
+
+struct FpFusedRequest {
+    format: FpFormat,
+    op: FpFusedOp,
+    rd: u8,
+    rs1: u8,
+    rs2: u8,
+    rs3: u8,
+    rounding: u8,
+    word: u32,
+}
+
+struct FpConversionRequest {
+    format: FpFormat,
+    rd: u8,
+    rs1: u8,
+    width: u32,
+    unsigned: bool,
+    rounding: u8,
+    word: u32,
 }
 
 /// One hart and the bus it fetches from and executes against.
@@ -351,6 +384,15 @@ impl<B: Bus> Machine<B> {
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
                 self.write_f32(rd, value);
             }
+            Instruction::Fld { rd, rs1, offset } => {
+                self.require_fp_enabled(word)?;
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self
+                    .bus
+                    .read_u64(address)
+                    .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+                self.write_f64(rd, value);
+            }
             Instruction::Fsw { rs2, rs1, offset } => {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
@@ -360,123 +402,120 @@ impl<B: Bus> Machine<B> {
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 4);
             }
+            Instruction::Fsd { rs2, rs1, offset } => {
+                self.require_fp_enabled(word)?;
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self.read_fpr(rs2);
+                self.bus
+                    .write_u64(address, value)
+                    .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                self.invalidate_reservation(address, 8);
+            }
             Instruction::FpBinary {
+                format,
                 op,
                 rd,
                 rs1,
                 rs2,
                 rounding,
+            } => self.execute_fp_binary(FpBinaryRequest {
+                format,
+                op,
+                rd,
+                rs1,
+                rs2,
+                rounding,
+                word,
+            })?,
+            Instruction::FpSqrt {
+                format,
+                rd,
+                rs1,
+                rounding,
             } => {
-                self.require_fp_enabled(word)?;
-                let a = self.read_f32(rs1);
-                let b = self.read_f32(rs2);
-                match op {
-                    FpBinaryOp::Add | FpBinaryOp::Sub | FpBinaryOp::Mul | FpBinaryOp::Div => {
-                        let mode = self.rounding_mode(rounding, word)?;
-                        let result = match op {
-                            FpBinaryOp::Add => fp::add(a, b, mode),
-                            FpBinaryOp::Sub => fp::sub(a, b, mode),
-                            FpBinaryOp::Mul => fp::mul(a, b, mode),
-                            FpBinaryOp::Div => fp::div(a, b, mode),
-                            _ => unreachable!(),
-                        };
-                        self.write_fp_result(rd, result);
-                    }
-                    FpBinaryOp::SignInject => {
-                        self.write_f32(rd, (a & !fp::SIGN_MASK) | (b & fp::SIGN_MASK));
-                    }
-                    FpBinaryOp::SignInjectNegated => {
-                        self.write_f32(
-                            rd,
-                            (a & !fp::SIGN_MASK) | ((b ^ fp::SIGN_MASK) & fp::SIGN_MASK),
-                        );
-                    }
-                    FpBinaryOp::SignInjectXor => {
-                        self.write_f32(rd, (a & !fp::SIGN_MASK) | ((a ^ b) & fp::SIGN_MASK));
-                    }
-                    FpBinaryOp::Min => self.write_fp_result(rd, fp::min(a, b)),
-                    FpBinaryOp::Max => self.write_fp_result(rd, fp::max(a, b)),
-                }
-            }
-            Instruction::FpSqrt { rd, rs1, rounding } => {
-                self.require_fp_enabled(word)?;
-                let mode = self.rounding_mode(rounding, word)?;
-                self.write_fp_result(rd, fp::sqrt(self.read_f32(rs1), mode));
+                self.execute_fp_sqrt(format, rd, rs1, rounding, word)?;
             }
             Instruction::FpFused {
+                format,
                 op,
                 rd,
                 rs1,
                 rs2,
                 rs3,
                 rounding,
-            } => {
-                self.require_fp_enabled(word)?;
-                let mode = self.rounding_mode(rounding, word)?;
-                let (negate_product, negate_addend) = match op {
-                    FpFusedOp::Madd => (false, false),
-                    FpFusedOp::Msub => (false, true),
-                    FpFusedOp::Nmsub => (true, false),
-                    FpFusedOp::Nmadd => (true, true),
-                };
-                let result = fp::fma(
-                    self.read_f32(rs1),
-                    self.read_f32(rs2),
-                    self.read_f32(rs3),
-                    mode,
-                    negate_product,
-                    negate_addend,
-                );
-                self.write_fp_result(rd, result);
-            }
-            Instruction::FpCompare { op, rd, rs1, rs2 } => {
-                self.require_fp_enabled(word)?;
-                let comparison = match op {
-                    FpCompareOp::Equal => fp::Compare::Equal,
-                    FpCompareOp::Less => fp::Compare::Less,
-                    FpCompareOp::LessEqual => fp::Compare::LessEqual,
-                };
-                let (result, flags) =
-                    fp::compare(self.read_f32(rs1), self.read_f32(rs2), comparison);
-                self.write_fp_flags(flags);
-                self.write(rd, u64::from(result == Some(true)));
-            }
-            Instruction::FpClass { rd, rs1 } => {
-                self.require_fp_enabled(word)?;
-                self.write(rd, u64::from(fp::classify_bits(self.read_f32(rs1))));
+            } => self.execute_fp_fused(FpFusedRequest {
+                format,
+                op,
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rounding,
+                word,
+            })?,
+            Instruction::FpCompare {
+                format,
+                op,
+                rd,
+                rs1,
+                rs2,
+            } => self.execute_fp_compare(format, op, rd, rs1, rs2, word)?,
+            Instruction::FpClass { format, rd, rs1 } => {
+                self.execute_fp_class(format, rd, rs1, word)?;
             }
             Instruction::FpToInt {
+                format,
                 rd,
                 rs1,
                 width,
                 unsigned,
                 rounding,
-            } => {
-                self.require_fp_enabled(word)?;
-                let mode = self.rounding_mode(rounding, word)?;
-                let result = fp::to_int(self.read_f32(rs1), width, unsigned, mode);
-                self.write_fp_flags(result.flags);
-                self.write(rd, result.value);
-            }
+            } => self.execute_fp_to_int(FpConversionRequest {
+                format,
+                rd,
+                rs1,
+                width,
+                unsigned,
+                rounding,
+                word,
+            })?,
             Instruction::IntToFp {
+                format,
                 rd,
                 rs1,
                 width,
                 unsigned,
                 rounding,
-            } => {
+            } => self.execute_int_to_fp(FpConversionRequest {
+                format,
+                rd,
+                rs1,
+                width,
+                unsigned,
+                rounding,
+                word,
+            })?,
+            Instruction::FpConvert {
+                from,
+                to,
+                rd,
+                rs1,
+                rounding,
+            } => self.execute_fp_convert(from, to, rd, rs1, rounding, word)?,
+            Instruction::FpMoveToInt { format, rd, rs1 } => {
                 self.require_fp_enabled(word)?;
-                let mode = self.rounding_mode(rounding, word)?;
-                let result = fp::from_int(self.gpr(rs1), width, unsigned, mode);
-                self.write_fp_result(rd, result);
+                let value = match format {
+                    FpFormat::Single => sign_extend_32(self.read_fpr(rs1)),
+                    FpFormat::Double => self.read_fpr(rs1),
+                };
+                self.write(rd, value);
             }
-            Instruction::FpMoveToInt { rd, rs1 } => {
+            Instruction::FpMoveFromInt { format, rd, rs1 } => {
                 self.require_fp_enabled(word)?;
-                self.write(rd, sign_extend_32(self.read_fpr(rs1)));
-            }
-            Instruction::FpMoveFromInt { rd, rs1 } => {
-                self.require_fp_enabled(word)?;
-                self.write_f32(rd, self.gpr(rs1) as u32);
+                match format {
+                    FpFormat::Single => self.write_f32(rd, self.gpr(rs1) as u32),
+                    FpFormat::Double => self.write_f64(rd, self.gpr(rs1)),
+                }
             }
             Instruction::Mul { rd, rs1, rs2 } => {
                 self.write(rd, self.gpr(rs1).wrapping_mul(self.gpr(rs2)));
@@ -985,6 +1024,290 @@ impl<B: Bus> Machine<B> {
         Ok(target)
     }
 
+    fn execute_fp_binary(&mut self, request: FpBinaryRequest) -> Result<(), Exception> {
+        let FpBinaryRequest {
+            format,
+            op,
+            rd,
+            rs1,
+            rs2,
+            rounding,
+            word,
+        } = request;
+        self.require_fp_enabled(word)?;
+        let a = self.read_fp(format, rs1);
+        let b = self.read_fp(format, rs2);
+        match op {
+            FpBinaryOp::Add | FpBinaryOp::Sub | FpBinaryOp::Mul | FpBinaryOp::Div => {
+                let mode = self.rounding_mode(rounding, word)?;
+                match format {
+                    FpFormat::Single => {
+                        let a = a as u32;
+                        let b = b as u32;
+                        let result = match op {
+                            FpBinaryOp::Add => fp::add(a, b, mode),
+                            FpBinaryOp::Sub => fp::sub(a, b, mode),
+                            FpBinaryOp::Mul => fp::mul(a, b, mode),
+                            FpBinaryOp::Div => fp::div(a, b, mode),
+                            _ => unreachable!(),
+                        };
+                        self.write_fp_result(rd, result);
+                    }
+                    FpFormat::Double => {
+                        let result = match op {
+                            FpBinaryOp::Add => fp64::add(a, b, mode),
+                            FpBinaryOp::Sub => fp64::sub(a, b, mode),
+                            FpBinaryOp::Mul => fp64::mul(a, b, mode),
+                            FpBinaryOp::Div => fp64::div(a, b, mode),
+                            _ => unreachable!(),
+                        };
+                        self.write_fp64_result(rd, result);
+                    }
+                }
+            }
+            FpBinaryOp::SignInject
+            | FpBinaryOp::SignInjectNegated
+            | FpBinaryOp::SignInjectXor
+            | FpBinaryOp::Min
+            | FpBinaryOp::Max => {
+                let (bits, flags) = match format {
+                    FpFormat::Single => {
+                        let a = a as u32;
+                        let b = b as u32;
+                        let sign_mask = format_sign_mask(format) as u32;
+                        let (bits, flags) = match op {
+                            FpBinaryOp::SignInject => ((a & !sign_mask) | (b & sign_mask), 0),
+                            FpBinaryOp::SignInjectNegated => {
+                                ((a & !sign_mask) | ((b ^ sign_mask) & sign_mask), 0)
+                            }
+                            FpBinaryOp::SignInjectXor => {
+                                ((a & !sign_mask) | ((a ^ b) & sign_mask), 0)
+                            }
+                            FpBinaryOp::Min => {
+                                let result = fp::min(a, b);
+                                (result.bits, result.flags)
+                            }
+                            FpBinaryOp::Max => {
+                                let result = fp::max(a, b);
+                                (result.bits, result.flags)
+                            }
+                            _ => unreachable!(),
+                        };
+                        (u64::from(bits), flags)
+                    }
+                    FpFormat::Double => {
+                        let sign_mask = format_sign_mask(format);
+                        match op {
+                            FpBinaryOp::SignInject => ((a & !sign_mask) | (b & sign_mask), 0),
+                            FpBinaryOp::SignInjectNegated => {
+                                ((a & !sign_mask) | ((b ^ sign_mask) & sign_mask), 0)
+                            }
+                            FpBinaryOp::SignInjectXor => {
+                                ((a & !sign_mask) | ((a ^ b) & sign_mask), 0)
+                            }
+                            FpBinaryOp::Min => {
+                                let result = fp64::min(a, b);
+                                (result.bits, result.flags)
+                            }
+                            FpBinaryOp::Max => {
+                                let result = fp64::max(a, b);
+                                (result.bits, result.flags)
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                };
+                self.write_fp_bits(rd, format, bits);
+                self.write_fp_flags(flags);
+            }
+        }
+        Ok(())
+    }
+
+    fn execute_fp_sqrt(
+        &mut self,
+        format: FpFormat,
+        rd: u8,
+        rs1: u8,
+        rounding: u8,
+        word: u32,
+    ) -> Result<(), Exception> {
+        self.require_fp_enabled(word)?;
+        let mode = self.rounding_mode(rounding, word)?;
+        match format {
+            FpFormat::Single => {
+                let result = fp::sqrt(self.read_f32(rs1), mode);
+                self.write_fp_result(rd, result);
+            }
+            FpFormat::Double => {
+                let result = fp64::sqrt(self.read_f64(rs1), mode);
+                self.write_fp64_result(rd, result);
+            }
+        }
+        Ok(())
+    }
+
+    fn execute_fp_fused(&mut self, request: FpFusedRequest) -> Result<(), Exception> {
+        let FpFusedRequest {
+            format,
+            op,
+            rd,
+            rs1,
+            rs2,
+            rs3,
+            rounding,
+            word,
+        } = request;
+        self.require_fp_enabled(word)?;
+        let mode = self.rounding_mode(rounding, word)?;
+        let (negate_product, negate_addend) = fused_signs(op);
+        match format {
+            FpFormat::Single => {
+                let result = fp::fma(
+                    self.read_f32(rs1),
+                    self.read_f32(rs2),
+                    self.read_f32(rs3),
+                    mode,
+                    negate_product,
+                    negate_addend,
+                );
+                self.write_fp_result(rd, result);
+            }
+            FpFormat::Double => {
+                let result = fp64::fma(
+                    self.read_f64(rs1),
+                    self.read_f64(rs2),
+                    self.read_f64(rs3),
+                    mode,
+                    negate_product,
+                    negate_addend,
+                );
+                self.write_fp64_result(rd, result);
+            }
+        }
+        Ok(())
+    }
+
+    fn execute_fp_compare(
+        &mut self,
+        format: FpFormat,
+        op: FpCompareOp,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        word: u32,
+    ) -> Result<(), Exception> {
+        self.require_fp_enabled(word)?;
+        let (result, flags) = match format {
+            FpFormat::Single => {
+                let comparison = match op {
+                    FpCompareOp::Equal => fp::Compare::Equal,
+                    FpCompareOp::Less => fp::Compare::Less,
+                    FpCompareOp::LessEqual => fp::Compare::LessEqual,
+                };
+                fp::compare(self.read_f32(rs1), self.read_f32(rs2), comparison)
+            }
+            FpFormat::Double => {
+                let comparison = match op {
+                    FpCompareOp::Equal => fp64::Compare::Equal,
+                    FpCompareOp::Less => fp64::Compare::Less,
+                    FpCompareOp::LessEqual => fp64::Compare::LessEqual,
+                };
+                fp64::compare(self.read_f64(rs1), self.read_f64(rs2), comparison)
+            }
+        };
+        self.write_fp_flags(flags);
+        self.write(rd, u64::from(result == Some(true)));
+        Ok(())
+    }
+
+    fn execute_fp_class(
+        &mut self,
+        format: FpFormat,
+        rd: u8,
+        rs1: u8,
+        word: u32,
+    ) -> Result<(), Exception> {
+        self.require_fp_enabled(word)?;
+        let class = match format {
+            FpFormat::Single => u64::from(fp::classify_bits(self.read_f32(rs1))),
+            FpFormat::Double => fp64::classify_bits(self.read_f64(rs1)),
+        };
+        self.write(rd, class);
+        Ok(())
+    }
+
+    fn execute_fp_to_int(&mut self, request: FpConversionRequest) -> Result<(), Exception> {
+        let FpConversionRequest {
+            format,
+            rd,
+            rs1,
+            width,
+            unsigned,
+            rounding,
+            word,
+        } = request;
+        self.require_fp_enabled(word)?;
+        let mode = self.rounding_mode(rounding, word)?;
+        let result = match format {
+            FpFormat::Single => fp::to_int(self.read_f32(rs1), width, unsigned, mode),
+            FpFormat::Double => fp64::to_int(self.read_f64(rs1), width, unsigned, mode),
+        };
+        self.write_fp_flags(result.flags);
+        self.write(rd, result.value);
+        Ok(())
+    }
+
+    fn execute_int_to_fp(&mut self, request: FpConversionRequest) -> Result<(), Exception> {
+        let FpConversionRequest {
+            format,
+            rd,
+            rs1,
+            width,
+            unsigned,
+            rounding,
+            word,
+        } = request;
+        self.require_fp_enabled(word)?;
+        let mode = self.rounding_mode(rounding, word)?;
+        match format {
+            FpFormat::Single => {
+                let result = fp::from_int(self.gpr(rs1), width, unsigned, mode);
+                self.write_fp_result(rd, result);
+            }
+            FpFormat::Double => {
+                let result = fp64::from_int(self.gpr(rs1), width, unsigned, mode);
+                self.write_fp64_result(rd, result);
+            }
+        }
+        Ok(())
+    }
+
+    fn execute_fp_convert(
+        &mut self,
+        from: FpFormat,
+        to: FpFormat,
+        rd: u8,
+        rs1: u8,
+        rounding: u8,
+        word: u32,
+    ) -> Result<(), Exception> {
+        self.require_fp_enabled(word)?;
+        let mode = self.rounding_mode(rounding, word)?;
+        match (from, to) {
+            (FpFormat::Single, FpFormat::Double) => {
+                let result = fp64::from_single(self.read_f32(rs1));
+                self.write_fp64_result(rd, result);
+            }
+            (FpFormat::Double, FpFormat::Single) => {
+                let result = fp64::to_single(self.read_f64(rs1), mode);
+                self.write_fp_result(rd, result);
+            }
+            _ => unreachable!("format conversion changes width"),
+        }
+        Ok(())
+    }
+
     /// Requires `mstatus.FS` to enable floating-point state.
     fn require_fp_enabled(&self, word: u32) -> Result<(), Exception> {
         if self.cpu.fp_enabled() {
@@ -1007,6 +1330,18 @@ impl<B: Bus> Machine<B> {
         }
     }
 
+    /// Reads a double-precision operand from an FPR.
+    fn read_f64(&self, index: u8) -> u64 {
+        self.read_fpr(index)
+    }
+
+    fn read_fp(&self, format: FpFormat, index: u8) -> u64 {
+        match format {
+            FpFormat::Single => u64::from(self.read_f32(index)),
+            FpFormat::Double => self.read_f64(index),
+        }
+    }
+
     /// Reads the architectural bits of an FPR.
     fn read_fpr(&self, index: u8) -> u64 {
         self.cpu.read_fpr(usize::from(index))
@@ -1018,9 +1353,27 @@ impl<B: Bus> Machine<B> {
             .write_fpr(usize::from(index), NAN_BOX | u64::from(value));
     }
 
+    /// Writes a double-precision value as architectural bits.
+    fn write_f64(&mut self, index: u8, value: u64) {
+        self.cpu.write_fpr(usize::from(index), value);
+    }
+
+    fn write_fp_bits(&mut self, index: u8, format: FpFormat, bits: u64) {
+        match format {
+            FpFormat::Single => self.write_f32(index, bits as u32),
+            FpFormat::Double => self.write_f64(index, bits),
+        }
+    }
+
     /// Writes a result to an FPR and accumulates any raised flags.
     fn write_fp_result(&mut self, index: u8, result: fp::FpResult) {
         self.write_f32(index, result.bits);
+        self.write_fp_flags(result.flags);
+    }
+
+    /// Writes a double-precision result and accumulates raised flags.
+    fn write_fp64_result(&mut self, index: u8, result: fp64::DoubleResult) {
+        self.write_f64(index, result.bits);
         self.write_fp_flags(result.flags);
     }
 
@@ -1058,6 +1411,22 @@ impl<B: Bus> Machine<B> {
     /// Writes `value` to general-purpose register `rd`; `x0` discards it.
     fn write(&mut self, rd: u8, value: u64) {
         self.cpu.write_gpr(usize::from(rd), value);
+    }
+}
+
+fn format_sign_mask(format: FpFormat) -> u64 {
+    match format {
+        FpFormat::Single => u64::from(fp::SIGN_MASK),
+        FpFormat::Double => fp64::SIGN_MASK,
+    }
+}
+
+fn fused_signs(op: FpFusedOp) -> (bool, bool) {
+    match op {
+        FpFusedOp::Madd => (false, false),
+        FpFusedOp::Msub => (false, true),
+        FpFusedOp::Nmsub => (true, false),
+        FpFusedOp::Nmadd => (true, true),
     }
 }
 
@@ -1262,6 +1631,7 @@ mod tests {
         );
 
         machine.execute(Instruction::FpBinary {
+            format: FpFormat::Single,
             op: FpBinaryOp::Add,
             rd: 2,
             rs1: 0,
@@ -1291,6 +1661,7 @@ mod tests {
         );
 
         machine.execute(Instruction::FpBinary {
+            format: FpFormat::Single,
             op: FpBinaryOp::Add,
             rd: 2,
             rs1: 0,
@@ -2402,7 +2773,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64imafcu_and_ignores_warl_writes() {
+    fn misa_reports_rv64imafdcu_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -2412,6 +2783,7 @@ mod tests {
         let misa = machine.cpu().read_gpr(5);
         assert_eq!(misa >> 62, 2, "MXL");
         assert_ne!(misa & 1, 0, "A extension");
+        assert_ne!(misa & (1 << 3), 0, "D extension");
         assert_ne!(misa & (1 << 5), 0, "F extension");
         assert_ne!(misa & (1 << 8), 0, "I extension");
         assert_ne!(misa & (1 << 12), 0, "M extension");

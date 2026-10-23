@@ -29,6 +29,8 @@ fn renderer_matches_objdump_text() {
         check_fixture(fixture, assemble::assemble_compressed);
     }
     check_fixture("f.S", assemble::assemble_float);
+    check_fixture("d.S", assemble::assemble_double);
+    check_fixture("compressed_d.S", assemble::assemble_double);
 }
 
 /// Renders every instruction of a fixture and compares it with `objdump` text.

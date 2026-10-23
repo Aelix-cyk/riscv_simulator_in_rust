@@ -38,8 +38,10 @@ const COMPRESSED_MISC_WIDTH_FLAG_SHIFT: u32 = 12;
 const COMPRESSED_MISC_WIDTH_FLAG_BITS: u32 = 1;
 
 const C0_ADDI4SPN: u8 = 0b000;
+const C0_FLD: u8 = 0b001;
 const C0_LW: u8 = 0b010;
 const C0_LD: u8 = 0b011;
+const C0_FSD: u8 = 0b101;
 const C0_SW: u8 = 0b110;
 const C0_SD: u8 = 0b111;
 const C1_ADDI: u8 = 0b000;
@@ -51,9 +53,11 @@ const C1_J: u8 = 0b101;
 const C1_BEQZ: u8 = 0b110;
 const C1_BNEZ: u8 = 0b111;
 const C2_SLLI: u8 = 0b000;
+const C2_FLDSP: u8 = 0b001;
 const C2_LWSP: u8 = 0b010;
 const C2_LDSP: u8 = 0b011;
 const C2_MISC: u8 = 0b100;
+const C2_FSDSP: u8 = 0b101;
 const C2_SWSP: u8 = 0b110;
 const C2_SDSP: u8 = 0b111;
 
@@ -306,8 +310,13 @@ pub enum Instruction {
     Flw { rd: u8, rs1: u8, offset: i64 },
     /// `fsw rs2, offset(rs1)`
     Fsw { rs2: u8, rs1: u8, offset: i64 },
+    /// `fld rd, offset(rs1)`
+    Fld { rd: u8, rs1: u8, offset: i64 },
+    /// `fsd rs2, offset(rs1)`
+    Fsd { rs2: u8, rs1: u8, offset: i64 },
     /// A binary F operation.
     FpBinary {
+        format: FpFormat,
         op: FpBinaryOp,
         rd: u8,
         rs1: u8,
@@ -315,9 +324,15 @@ pub enum Instruction {
         rounding: u8,
     },
     /// `fsqrt.s rd,rs1`
-    FpSqrt { rd: u8, rs1: u8, rounding: u8 },
+    FpSqrt {
+        format: FpFormat,
+        rd: u8,
+        rs1: u8,
+        rounding: u8,
+    },
     /// A fused F multiply-add-family operation.
     FpFused {
+        format: FpFormat,
         op: FpFusedOp,
         rd: u8,
         rs1: u8,
@@ -327,15 +342,17 @@ pub enum Instruction {
     },
     /// A floating-point comparison producing an integer result.
     FpCompare {
+        format: FpFormat,
         op: FpCompareOp,
         rd: u8,
         rs1: u8,
         rs2: u8,
     },
     /// `fclass.s rd,rs1`
-    FpClass { rd: u8, rs1: u8 },
+    FpClass { format: FpFormat, rd: u8, rs1: u8 },
     /// A float-to-integer conversion.
     FpToInt {
+        format: FpFormat,
         rd: u8,
         rs1: u8,
         width: u32,
@@ -344,16 +361,25 @@ pub enum Instruction {
     },
     /// An integer-to-float conversion.
     IntToFp {
+        format: FpFormat,
         rd: u8,
         rs1: u8,
         width: u32,
         unsigned: bool,
         rounding: u8,
     },
+    /// Conversion between single and double precision.
+    FpConvert {
+        from: FpFormat,
+        to: FpFormat,
+        rd: u8,
+        rs1: u8,
+        rounding: u8,
+    },
     /// `fmv.x.w rd,rs1`
-    FpMoveToInt { rd: u8, rs1: u8 },
+    FpMoveToInt { format: FpFormat, rd: u8, rs1: u8 },
     /// `fmv.w.x rd,rs1`
-    FpMoveFromInt { rd: u8, rs1: u8 },
+    FpMoveFromInt { format: FpFormat, rd: u8, rs1: u8 },
 
     // M-extension multiplication.
     /// `mul rd, rs1, rs2`
@@ -630,6 +656,13 @@ pub enum Instruction {
     Jal { rd: u8, offset: i64 },
 }
 
+/// Floating-point operand format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FpFormat {
+    Single,
+    Double,
+}
+
 /// Binary operations encoded by the F opcode space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FpBinaryOp {
@@ -744,6 +777,12 @@ enum CompressedInstruction {
         offset: i64,
         word: u16,
     },
+    Fld {
+        rd: u8,
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
     Sw {
         rs2: u8,
         rs1: u8,
@@ -751,6 +790,12 @@ enum CompressedInstruction {
         word: u16,
     },
     Sd {
+        rs2: u8,
+        rs1: u8,
+        offset: i64,
+        word: u16,
+    },
+    Fsd {
         rs2: u8,
         rs1: u8,
         offset: i64,
@@ -858,6 +903,11 @@ enum CompressedInstruction {
         offset: i64,
         word: u16,
     },
+    Fldsp {
+        rd: u8,
+        offset: i64,
+        word: u16,
+    },
     Jr {
         rs1: u8,
         word: u16,
@@ -889,6 +939,11 @@ enum CompressedInstruction {
         offset: i64,
         word: u16,
     },
+    Fsdsp {
+        rs2: u8,
+        offset: i64,
+        word: u16,
+    },
 }
 
 impl CompressedInstruction {
@@ -897,8 +952,10 @@ impl CompressedInstruction {
             Self::Addi4spn { word, .. }
             | Self::Lw { word, .. }
             | Self::Ld { word, .. }
+            | Self::Fld { word, .. }
             | Self::Sw { word, .. }
             | Self::Sd { word, .. }
+            | Self::Fsd { word, .. }
             | Self::Addi { word, .. }
             | Self::Nop { word, .. }
             | Self::Addiw { word, .. }
@@ -920,13 +977,15 @@ impl CompressedInstruction {
             | Self::Slli { word, .. }
             | Self::Lwsp { word, .. }
             | Self::Ldsp { word, .. }
+            | Self::Fldsp { word, .. }
             | Self::Jr { word, .. }
             | Self::Mv { word, .. }
             | Self::Ebreak { word }
             | Self::Jalr { word, .. }
             | Self::Add { word, .. }
             | Self::Swsp { word, .. }
-            | Self::Sdsp { word, .. } => word,
+            | Self::Sdsp { word, .. }
+            | Self::Fsdsp { word, .. } => word,
         }
     }
 
@@ -944,6 +1003,15 @@ impl CompressedInstruction {
                 Ok(Self::Addi4spn {
                     rd: CompressedWord::new(word).rd_prime(),
                     imm,
+                    word,
+                })
+            }
+            (0b00, C0_FLD) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Fld {
+                    rd: word_fields.rd_prime(),
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.ld_offset(),
                     word,
                 })
             }
@@ -977,6 +1045,15 @@ impl CompressedInstruction {
             (0b00, C0_SD) => {
                 let word_fields = CompressedWord::new(word);
                 Ok(Self::Sd {
+                    rs2: word_fields.rd_prime(),
+                    rs1: word_fields.rs1_prime(),
+                    offset: word_fields.ld_offset(),
+                    word,
+                })
+            }
+            (0b00, C0_FSD) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Fsd {
                     rs2: word_fields.rd_prime(),
                     rs1: word_fields.rs1_prime(),
                     offset: word_fields.ld_offset(),
@@ -1102,6 +1179,14 @@ impl CompressedInstruction {
                     word,
                 })
             }
+            (0b10, C2_FLDSP) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Fldsp {
+                    rd: word_fields.rd(),
+                    offset: word_fields.ldsp_offset(),
+                    word,
+                })
+            }
             (0b10, C2_LWSP) => {
                 let word_fields = CompressedWord::new(word);
                 let rd = word_fields.rd();
@@ -1169,6 +1254,14 @@ impl CompressedInstruction {
                     word,
                 })
             }
+            (0b10, C2_FSDSP) => {
+                let word_fields = CompressedWord::new(word);
+                Ok(Self::Fsdsp {
+                    rs2: word_fields.rs2(),
+                    offset: word_fields.sdsp_offset(),
+                    word,
+                })
+            }
             _ => Err(Trap::IllegalInstruction),
         }
     }
@@ -1183,6 +1276,9 @@ impl CompressedInstruction {
             Self::Ld {
                 rd, rs1, offset, ..
             } => encode_i(inst::MATCH_LD, rd, rs1, offset),
+            Self::Fld {
+                rd, rs1, offset, ..
+            } => encode_i(inst::MATCH_FLD, rd, rs1, offset),
             Self::Sw {
                 rs2, rs1, offset, ..
             } => {
@@ -1193,6 +1289,12 @@ impl CompressedInstruction {
                 rs2, rs1, offset, ..
             } => {
                 encode_immediate(inst::MATCH_SD, offset, S_IMMEDIATE_FIELDS)
+                    | store_register_fields(rs1, rs2)
+            }
+            Self::Fsd {
+                rs2, rs1, offset, ..
+            } => {
+                encode_immediate(inst::MATCH_FSD, offset, S_IMMEDIATE_FIELDS)
                     | store_register_fields(rs1, rs2)
             }
             Self::Addi { rd, imm, .. } => encode_i(inst::MATCH_ADDI, rd, rd, imm),
@@ -1224,6 +1326,7 @@ impl CompressedInstruction {
             Self::Slli { rd, shamt, .. } => encode_i(inst::MATCH_SLLI, rd, rd, i64::from(shamt)),
             Self::Lwsp { rd, offset, .. } => encode_i(inst::MATCH_LW, rd, SP, offset),
             Self::Ldsp { rd, offset, .. } => encode_i(inst::MATCH_LD, rd, SP, offset),
+            Self::Fldsp { rd, offset, .. } => encode_i(inst::MATCH_FLD, rd, SP, offset),
             Self::Jr { rs1, .. } => encode_i(inst::MATCH_JALR, ZERO_REGISTER, rs1, ZERO_OFFSET),
             Self::Mv { rd, rs2, .. } => encode_r(inst::MATCH_ADD, rd, ZERO_REGISTER, rs2),
             Self::Ebreak { .. } => inst::MATCH_EBREAK,
@@ -1236,6 +1339,11 @@ impl CompressedInstruction {
             }
             Self::Sdsp { rs2, offset, .. } => {
                 encode_immediate(inst::MATCH_SD, offset, S_IMMEDIATE_FIELDS)
+                    | (u32::from(SP) << STANDARD_RS1_SHIFT)
+                    | (u32::from(rs2) << STANDARD_RS2_SHIFT)
+            }
+            Self::Fsdsp { rs2, offset, .. } => {
+                encode_immediate(inst::MATCH_FSD, offset, S_IMMEDIATE_FIELDS)
                     | (u32::from(SP) << STANDARD_RS1_SHIFT)
                     | (u32::from(rs2) << STANDARD_RS2_SHIFT)
             }
@@ -1257,12 +1365,20 @@ impl CompressedInstruction {
             } => {
                 format!("c.ld {},{offset}({})", abi_name(rd), abi_name(rs1))
             }
+            Self::Fld {
+                rd, rs1, offset, ..
+            } => {
+                format!("c.fld {},{offset}({})", fpr_abi_name(rd), abi_name(rs1))
+            }
             Self::Sw {
                 rs2, rs1, offset, ..
             } => format!("c.sw {},{offset}({})", abi_name(rs2), abi_name(rs1)),
             Self::Sd {
                 rs2, rs1, offset, ..
             } => format!("c.sd {},{offset}({})", abi_name(rs2), abi_name(rs1)),
+            Self::Fsd {
+                rs2, rs1, offset, ..
+            } => format!("c.fsd {},{offset}({})", fpr_abi_name(rs2), abi_name(rs1)),
             Self::Addi { rd, imm, .. } => format!("c.addi {},{imm}", abi_name(rd)),
             Self::Nop { imm, .. } => format!("c.addi zero,{imm}"),
             Self::Addiw { rd, imm, .. } => format!("c.addiw {},{imm}", abi_name(rd)),
@@ -1292,6 +1408,9 @@ impl CompressedInstruction {
             Self::Slli { rd, shamt, .. } => format!("c.slli {},{shamt:#x}", abi_name(rd)),
             Self::Lwsp { rd, offset, .. } => format!("c.lwsp {},{offset}(sp)", abi_name(rd)),
             Self::Ldsp { rd, offset, .. } => format!("c.ldsp {},{offset}(sp)", abi_name(rd)),
+            Self::Fldsp { rd, offset, .. } => {
+                format!("c.fldsp {},{offset}(sp)", fpr_abi_name(rd))
+            }
             Self::Jr { rs1, .. } => format!("c.jr {}", abi_name(rs1)),
             Self::Mv { rd, rs2, .. } => format!("c.mv {},{}", abi_name(rd), abi_name(rs2)),
             Self::Ebreak { .. } => "c.ebreak".to_owned(),
@@ -1302,6 +1421,9 @@ impl CompressedInstruction {
             }
             Self::Sdsp { rs2, offset, .. } => {
                 format!("c.sdsp {},{offset}(sp)", abi_name(rs2))
+            }
+            Self::Fsdsp { rs2, offset, .. } => {
+                format!("c.fsdsp {},{offset}(sp)", fpr_abi_name(rs2))
             }
         }
     }
@@ -1472,38 +1594,79 @@ impl Instruction {
             Instruction::Sraw { .. } => "sraw",
             Instruction::Flw { .. } => "flw",
             Instruction::Fsw { .. } => "fsw",
-            Instruction::FpBinary { op, .. } => match op {
-                FpBinaryOp::Add => "fadd.s",
-                FpBinaryOp::Sub => "fsub.s",
-                FpBinaryOp::Mul => "fmul.s",
-                FpBinaryOp::Div => "fdiv.s",
-                FpBinaryOp::SignInject => "fsgnj.s",
-                FpBinaryOp::SignInjectNegated => "fsgnjn.s",
-                FpBinaryOp::SignInjectXor => "fsgnjx.s",
-                FpBinaryOp::Min => "fmin.s",
-                FpBinaryOp::Max => "fmax.s",
+            Instruction::Fld { .. } => "fld",
+            Instruction::Fsd { .. } => "fsd",
+            Instruction::FpBinary { op, format, .. } => match (op, format) {
+                (FpBinaryOp::Add, FpFormat::Single) => "fadd.s",
+                (FpBinaryOp::Sub, FpFormat::Single) => "fsub.s",
+                (FpBinaryOp::Mul, FpFormat::Single) => "fmul.s",
+                (FpBinaryOp::Div, FpFormat::Single) => "fdiv.s",
+                (FpBinaryOp::SignInject, FpFormat::Single) => "fsgnj.s",
+                (FpBinaryOp::SignInjectNegated, FpFormat::Single) => "fsgnjn.s",
+                (FpBinaryOp::SignInjectXor, FpFormat::Single) => "fsgnjx.s",
+                (FpBinaryOp::Min, FpFormat::Single) => "fmin.s",
+                (FpBinaryOp::Max, FpFormat::Single) => "fmax.s",
+                (FpBinaryOp::Add, FpFormat::Double) => "fadd.d",
+                (FpBinaryOp::Sub, FpFormat::Double) => "fsub.d",
+                (FpBinaryOp::Mul, FpFormat::Double) => "fmul.d",
+                (FpBinaryOp::Div, FpFormat::Double) => "fdiv.d",
+                (FpBinaryOp::SignInject, FpFormat::Double) => "fsgnj.d",
+                (FpBinaryOp::SignInjectNegated, FpFormat::Double) => "fsgnjn.d",
+                (FpBinaryOp::SignInjectXor, FpFormat::Double) => "fsgnjx.d",
+                (FpBinaryOp::Min, FpFormat::Double) => "fmin.d",
+                (FpBinaryOp::Max, FpFormat::Double) => "fmax.d",
             },
-            Instruction::FpSqrt { .. } => "fsqrt.s",
-            Instruction::FpFused { op, .. } => match op {
-                FpFusedOp::Madd => "fmadd.s",
-                FpFusedOp::Msub => "fmsub.s",
-                FpFusedOp::Nmsub => "fnmsub.s",
-                FpFusedOp::Nmadd => "fnmadd.s",
+            Instruction::FpSqrt { format, .. } => match format {
+                FpFormat::Single => "fsqrt.s",
+                FpFormat::Double => "fsqrt.d",
             },
-            Instruction::FpCompare { op, .. } => match op {
-                FpCompareOp::Equal => "feq.s",
-                FpCompareOp::Less => "flt.s",
-                FpCompareOp::LessEqual => "fle.s",
+            Instruction::FpFused { op, format, .. } => match (op, format) {
+                (FpFusedOp::Madd, FpFormat::Single) => "fmadd.s",
+                (FpFusedOp::Msub, FpFormat::Single) => "fmsub.s",
+                (FpFusedOp::Nmsub, FpFormat::Single) => "fnmsub.s",
+                (FpFusedOp::Nmadd, FpFormat::Single) => "fnmadd.s",
+                (FpFusedOp::Madd, FpFormat::Double) => "fmadd.d",
+                (FpFusedOp::Msub, FpFormat::Double) => "fmsub.d",
+                (FpFusedOp::Nmsub, FpFormat::Double) => "fnmsub.d",
+                (FpFusedOp::Nmadd, FpFormat::Double) => "fnmadd.d",
             },
-            Instruction::FpClass { .. } => "fclass.s",
+            Instruction::FpCompare { op, format, .. } => match (op, format) {
+                (FpCompareOp::Equal, FpFormat::Single) => "feq.s",
+                (FpCompareOp::Less, FpFormat::Single) => "flt.s",
+                (FpCompareOp::LessEqual, FpFormat::Single) => "fle.s",
+                (FpCompareOp::Equal, FpFormat::Double) => "feq.d",
+                (FpCompareOp::Less, FpFormat::Double) => "flt.d",
+                (FpCompareOp::LessEqual, FpFormat::Double) => "fle.d",
+            },
+            Instruction::FpClass { format, .. } => match format {
+                FpFormat::Single => "fclass.s",
+                FpFormat::Double => "fclass.d",
+            },
             Instruction::FpToInt {
-                width, unsigned, ..
-            } => to_int_mnemonic(width, unsigned),
+                format,
+                width,
+                unsigned,
+                ..
+            } => to_int_mnemonic(format, width, unsigned),
             Instruction::IntToFp {
-                width, unsigned, ..
-            } => from_int_mnemonic(width, unsigned),
-            Instruction::FpMoveToInt { .. } => "fmv.x.w",
-            Instruction::FpMoveFromInt { .. } => "fmv.w.x",
+                format,
+                width,
+                unsigned,
+                ..
+            } => from_int_mnemonic(format, width, unsigned),
+            Instruction::FpConvert { from, to, .. } => match (from, to) {
+                (FpFormat::Double, FpFormat::Single) => "fcvt.s.d",
+                (FpFormat::Single, FpFormat::Double) => "fcvt.d.s",
+                _ => unreachable!("format conversion changes precision"),
+            },
+            Instruction::FpMoveToInt { format, .. } => match format {
+                FpFormat::Single => "fmv.x.w",
+                FpFormat::Double => "fmv.x.d",
+            },
+            Instruction::FpMoveFromInt { format, .. } => match format {
+                FpFormat::Single => "fmv.w.x",
+                FpFormat::Double => "fmv.d.x",
+            },
             Instruction::Mul { .. } => "mul",
             Instruction::Mulh { .. } => "mulh",
             Instruction::Mulhsu { .. } => "mulhsu",
@@ -1608,7 +1771,10 @@ impl Instruction {
             Instruction::Sraw { rd, rs1, rs2 } => reg_op("sraw", rd, rs1, rs2),
             Instruction::Flw { rd, rs1, offset } => fp_load_op("flw", rd, rs1, offset),
             Instruction::Fsw { rs2, rs1, offset } => fp_store_op("fsw", rs2, rs1, offset),
+            Instruction::Fld { rd, rs1, offset } => fp_load_op("fld", rd, rs1, offset),
+            Instruction::Fsd { rs2, rs1, offset } => fp_store_op("fsd", rs2, rs1, offset),
             Instruction::FpBinary {
+                format,
                 op,
                 rd,
                 rs1,
@@ -1616,21 +1782,28 @@ impl Instruction {
                 rounding,
             } => format!(
                 "{} {},{},{}{}",
-                fp_binary_mnemonic(op),
+                fp_binary_mnemonic(op, format),
                 fpr_abi_name(rd),
                 fpr_abi_name(rs1),
                 fpr_abi_name(rs2),
                 fp_binary_rounding_suffix(op, rounding)
             ),
-            Instruction::FpSqrt { rd, rs1, rounding } => {
+            Instruction::FpSqrt {
+                format,
+                rd,
+                rs1,
+                rounding,
+            } => {
                 format!(
-                    "fsqrt.s {},{}{}",
+                    "fsqrt{} {},{}{}",
+                    format_suffix(format),
                     fpr_abi_name(rd),
                     fpr_abi_name(rs1),
                     rounding_suffix(rounding)
                 )
             }
             Instruction::FpFused {
+                format,
                 op,
                 rd,
                 rs1,
@@ -1639,24 +1812,36 @@ impl Instruction {
                 rounding,
             } => format!(
                 "{} {},{},{},{}{}",
-                fp_fused_mnemonic(op),
+                fp_fused_mnemonic(op, format),
                 fpr_abi_name(rd),
                 fpr_abi_name(rs1),
                 fpr_abi_name(rs2),
                 fpr_abi_name(rs3),
                 rounding_suffix(rounding)
             ),
-            Instruction::FpCompare { op, rd, rs1, rs2 } => format!(
+            Instruction::FpCompare {
+                format,
+                op,
+                rd,
+                rs1,
+                rs2,
+            } => format!(
                 "{} {},{},{}",
-                fp_compare_mnemonic(op),
+                fp_compare_mnemonic(op, format),
                 abi_name(rd),
                 fpr_abi_name(rs1),
                 fpr_abi_name(rs2),
             ),
-            Instruction::FpClass { rd, rs1 } => {
-                format!("fclass.s {},{}", abi_name(rd), fpr_abi_name(rs1))
+            Instruction::FpClass { format, rd, rs1 } => {
+                format!(
+                    "fclass{} {},{}",
+                    format_suffix(format),
+                    abi_name(rd),
+                    fpr_abi_name(rs1)
+                )
             }
             Instruction::FpToInt {
+                format,
                 rd,
                 rs1,
                 width,
@@ -1664,12 +1849,13 @@ impl Instruction {
                 rounding,
             } => format!(
                 "{} {},{}{}",
-                to_int_mnemonic(width, unsigned),
+                to_int_mnemonic(format, width, unsigned),
                 abi_name(rd),
                 fpr_abi_name(rs1),
                 rounding_suffix(rounding)
             ),
             Instruction::IntToFp {
+                format,
                 rd,
                 rs1,
                 width,
@@ -1677,16 +1863,48 @@ impl Instruction {
                 rounding,
             } => format!(
                 "{} {},{}{}",
-                from_int_mnemonic(width, unsigned),
+                from_int_mnemonic(format, width, unsigned),
                 fpr_abi_name(rd),
                 abi_name(rs1),
-                rounding_suffix(rounding)
+                if format == FpFormat::Double && width == WORD_BITS {
+                    ""
+                } else {
+                    rounding_suffix(rounding)
+                }
             ),
-            Instruction::FpMoveToInt { rd, rs1 } => {
-                format!("fmv.x.w {},{}", abi_name(rd), fpr_abi_name(rs1))
+            Instruction::FpConvert {
+                from,
+                to,
+                rd,
+                rs1,
+                rounding,
+            } => format!(
+                "fcvt{}.{} {},{}{}",
+                format_suffix(to),
+                format_suffix(from).trim_start_matches('.'),
+                fpr_abi_name(rd),
+                fpr_abi_name(rs1),
+                if from == FpFormat::Single && to == FpFormat::Double {
+                    ""
+                } else {
+                    rounding_suffix(rounding)
+                }
+            ),
+            Instruction::FpMoveToInt { format, rd, rs1 } => {
+                format!(
+                    "fmv.x.{} {},{}",
+                    move_suffix(format),
+                    abi_name(rd),
+                    fpr_abi_name(rs1)
+                )
             }
-            Instruction::FpMoveFromInt { rd, rs1 } => {
-                format!("fmv.w.x {},{}", fpr_abi_name(rd), abi_name(rs1))
+            Instruction::FpMoveFromInt { format, rd, rs1 } => {
+                format!(
+                    "fmv.{}.x {},{}",
+                    move_suffix(format),
+                    fpr_abi_name(rd),
+                    abi_name(rs1)
+                )
             }
             Instruction::Mul { rd, rs1, rs2 } => reg_op("mul", rd, rs1, rs2),
             Instruction::Mulh { rd, rs1, rs2 } => reg_op("mulh", rd, rs1, rs2),
@@ -1918,17 +2136,26 @@ fn imm_op(mnemonic: &str, rd: u8, rs1: u8, imm: i64) -> String {
     format!("{mnemonic} {},{},{imm}", abi_name(rd), abi_name(rs1))
 }
 
-fn fp_binary_mnemonic(op: FpBinaryOp) -> &'static str {
-    match op {
-        FpBinaryOp::Add => "fadd.s",
-        FpBinaryOp::Sub => "fsub.s",
-        FpBinaryOp::Mul => "fmul.s",
-        FpBinaryOp::Div => "fdiv.s",
-        FpBinaryOp::SignInject => "fsgnj.s",
-        FpBinaryOp::SignInjectNegated => "fsgnjn.s",
-        FpBinaryOp::SignInjectXor => "fsgnjx.s",
-        FpBinaryOp::Min => "fmin.s",
-        FpBinaryOp::Max => "fmax.s",
+fn fp_binary_mnemonic(op: FpBinaryOp, format: FpFormat) -> &'static str {
+    match (op, format) {
+        (FpBinaryOp::Add, FpFormat::Single) => "fadd.s",
+        (FpBinaryOp::Sub, FpFormat::Single) => "fsub.s",
+        (FpBinaryOp::Mul, FpFormat::Single) => "fmul.s",
+        (FpBinaryOp::Div, FpFormat::Single) => "fdiv.s",
+        (FpBinaryOp::SignInject, FpFormat::Single) => "fsgnj.s",
+        (FpBinaryOp::SignInjectNegated, FpFormat::Single) => "fsgnjn.s",
+        (FpBinaryOp::SignInjectXor, FpFormat::Single) => "fsgnjx.s",
+        (FpBinaryOp::Min, FpFormat::Single) => "fmin.s",
+        (FpBinaryOp::Max, FpFormat::Single) => "fmax.s",
+        (FpBinaryOp::Add, FpFormat::Double) => "fadd.d",
+        (FpBinaryOp::Sub, FpFormat::Double) => "fsub.d",
+        (FpBinaryOp::Mul, FpFormat::Double) => "fmul.d",
+        (FpBinaryOp::Div, FpFormat::Double) => "fdiv.d",
+        (FpBinaryOp::SignInject, FpFormat::Double) => "fsgnj.d",
+        (FpBinaryOp::SignInjectNegated, FpFormat::Double) => "fsgnjn.d",
+        (FpBinaryOp::SignInjectXor, FpFormat::Double) => "fsgnjx.d",
+        (FpBinaryOp::Min, FpFormat::Double) => "fmin.d",
+        (FpBinaryOp::Max, FpFormat::Double) => "fmax.d",
     }
 }
 
@@ -1956,40 +2183,69 @@ fn rounding_suffix(rounding: u8) -> &'static str {
     }
 }
 
-fn fp_fused_mnemonic(op: FpFusedOp) -> &'static str {
-    match op {
-        FpFusedOp::Madd => "fmadd.s",
-        FpFusedOp::Msub => "fmsub.s",
-        FpFusedOp::Nmsub => "fnmsub.s",
-        FpFusedOp::Nmadd => "fnmadd.s",
+fn fp_fused_mnemonic(op: FpFusedOp, format: FpFormat) -> &'static str {
+    match (op, format) {
+        (FpFusedOp::Madd, FpFormat::Single) => "fmadd.s",
+        (FpFusedOp::Msub, FpFormat::Single) => "fmsub.s",
+        (FpFusedOp::Nmsub, FpFormat::Single) => "fnmsub.s",
+        (FpFusedOp::Nmadd, FpFormat::Single) => "fnmadd.s",
+        (FpFusedOp::Madd, FpFormat::Double) => "fmadd.d",
+        (FpFusedOp::Msub, FpFormat::Double) => "fmsub.d",
+        (FpFusedOp::Nmsub, FpFormat::Double) => "fnmsub.d",
+        (FpFusedOp::Nmadd, FpFormat::Double) => "fnmadd.d",
     }
 }
 
-fn fp_compare_mnemonic(op: FpCompareOp) -> &'static str {
-    match op {
-        FpCompareOp::Equal => "feq.s",
-        FpCompareOp::Less => "flt.s",
-        FpCompareOp::LessEqual => "fle.s",
+fn fp_compare_mnemonic(op: FpCompareOp, format: FpFormat) -> &'static str {
+    match (op, format) {
+        (FpCompareOp::Equal, FpFormat::Single) => "feq.s",
+        (FpCompareOp::Less, FpFormat::Single) => "flt.s",
+        (FpCompareOp::LessEqual, FpFormat::Single) => "fle.s",
+        (FpCompareOp::Equal, FpFormat::Double) => "feq.d",
+        (FpCompareOp::Less, FpFormat::Double) => "flt.d",
+        (FpCompareOp::LessEqual, FpFormat::Double) => "fle.d",
     }
 }
 
-fn to_int_mnemonic(width: u32, unsigned: bool) -> &'static str {
-    match (width, unsigned) {
-        (WORD_BITS, false) => "fcvt.w.s",
-        (WORD_BITS, true) => "fcvt.wu.s",
-        (XLEN, false) => "fcvt.l.s",
-        (XLEN, true) => "fcvt.lu.s",
+fn to_int_mnemonic(format: FpFormat, width: u32, unsigned: bool) -> &'static str {
+    match (format, width, unsigned) {
+        (FpFormat::Single, WORD_BITS, false) => "fcvt.w.s",
+        (FpFormat::Single, WORD_BITS, true) => "fcvt.wu.s",
+        (FpFormat::Single, XLEN, false) => "fcvt.l.s",
+        (FpFormat::Single, XLEN, true) => "fcvt.lu.s",
+        (FpFormat::Double, WORD_BITS, false) => "fcvt.w.d",
+        (FpFormat::Double, WORD_BITS, true) => "fcvt.wu.d",
+        (FpFormat::Double, XLEN, false) => "fcvt.l.d",
+        (FpFormat::Double, XLEN, true) => "fcvt.lu.d",
         _ => unreachable!("F only converts 32- and 64-bit integers"),
     }
 }
 
-fn from_int_mnemonic(width: u32, unsigned: bool) -> &'static str {
-    match (width, unsigned) {
-        (WORD_BITS, false) => "fcvt.s.w",
-        (WORD_BITS, true) => "fcvt.s.wu",
-        (XLEN, false) => "fcvt.s.l",
-        (XLEN, true) => "fcvt.s.lu",
+fn from_int_mnemonic(format: FpFormat, width: u32, unsigned: bool) -> &'static str {
+    match (format, width, unsigned) {
+        (FpFormat::Single, WORD_BITS, false) => "fcvt.s.w",
+        (FpFormat::Single, WORD_BITS, true) => "fcvt.s.wu",
+        (FpFormat::Single, XLEN, false) => "fcvt.s.l",
+        (FpFormat::Single, XLEN, true) => "fcvt.s.lu",
+        (FpFormat::Double, WORD_BITS, false) => "fcvt.d.w",
+        (FpFormat::Double, WORD_BITS, true) => "fcvt.d.wu",
+        (FpFormat::Double, XLEN, false) => "fcvt.d.l",
+        (FpFormat::Double, XLEN, true) => "fcvt.d.lu",
         _ => unreachable!("F only converts 32- and 64-bit integers"),
+    }
+}
+
+fn format_suffix(format: FpFormat) -> &'static str {
+    match format {
+        FpFormat::Single => ".s",
+        FpFormat::Double => ".d",
+    }
+}
+
+fn move_suffix(format: FpFormat) -> &'static str {
+    match format {
+        FpFormat::Single => "w",
+        FpFormat::Double => "d",
     }
 }
 
@@ -2391,5 +2647,20 @@ mod tests {
     #[test]
     fn c_ebreak_decodes_as_ebreak() {
         assert_eq!(decode(C_EBREAK), Ok(Instruction::Ebreak));
+    }
+
+    #[test]
+    fn static_rounding_is_preserved_in_double_conversions() {
+        assert_eq!(
+            decode(0xd227_c7d3),
+            Ok(Instruction::IntToFp {
+                format: FpFormat::Double,
+                rd: 15,
+                rs1: 15,
+                width: XLEN,
+                unsigned: false,
+                rounding: 4,
+            })
+        );
     }
 }
