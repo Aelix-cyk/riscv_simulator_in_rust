@@ -91,6 +91,12 @@ const STANDARD_CSR_BITS: u32 = 12;
 const STANDARD_RS3_SHIFT: u32 = 27;
 const STANDARD_ROUNDING_SHIFT: u32 = 12;
 const STANDARD_ROUNDING_BITS: u32 = 3;
+const ROUNDING_NEAREST_EVEN: u8 = 0;
+const ROUNDING_TOWARD_ZERO: u8 = 1;
+const ROUNDING_DOWN: u8 = 2;
+const ROUNDING_UP: u8 = 3;
+const ROUNDING_NEAREST_MAX_MAGNITUDE: u8 = 4;
+const ROUNDING_DYNAMIC: u8 = 7;
 const STANDARD_FENCE_PRED_SHIFT: u32 = 24;
 const STANDARD_FENCE_SUCC_SHIFT: u32 = 20;
 const STANDARD_FENCE_BITS: u32 = 4;
@@ -1603,10 +1609,26 @@ impl Instruction {
             Instruction::Flw { rd, rs1, offset } => fp_load_op("flw", rd, rs1, offset),
             Instruction::Fsw { rs2, rs1, offset } => fp_store_op("fsw", rs2, rs1, offset),
             Instruction::FpBinary {
-                op, rd, rs1, rs2, ..
-            } => fp_reg_op(fp_binary_mnemonic(op), rd, rs1, rs2),
-            Instruction::FpSqrt { rd, rs1, .. } => {
-                format!("fsqrt.s {},{}", fpr_abi_name(rd), fpr_abi_name(rs1))
+                op,
+                rd,
+                rs1,
+                rs2,
+                rounding,
+            } => format!(
+                "{} {},{},{}{}",
+                fp_binary_mnemonic(op),
+                fpr_abi_name(rd),
+                fpr_abi_name(rs1),
+                fpr_abi_name(rs2),
+                fp_binary_rounding_suffix(op, rounding)
+            ),
+            Instruction::FpSqrt { rd, rs1, rounding } => {
+                format!(
+                    "fsqrt.s {},{}{}",
+                    fpr_abi_name(rd),
+                    fpr_abi_name(rs1),
+                    rounding_suffix(rounding)
+                )
             }
             Instruction::FpFused {
                 op,
@@ -1614,14 +1636,15 @@ impl Instruction {
                 rs1,
                 rs2,
                 rs3,
-                ..
+                rounding,
             } => format!(
-                "{} {},{},{},{}",
+                "{} {},{},{},{}{}",
                 fp_fused_mnemonic(op),
                 fpr_abi_name(rd),
                 fpr_abi_name(rs1),
                 fpr_abi_name(rs2),
-                fpr_abi_name(rs3)
+                fpr_abi_name(rs3),
+                rounding_suffix(rounding)
             ),
             Instruction::FpCompare { op, rd, rs1, rs2 } => format!(
                 "{} {},{},{}",
@@ -1638,24 +1661,26 @@ impl Instruction {
                 rs1,
                 width,
                 unsigned,
-                ..
+                rounding,
             } => format!(
-                "{} {},{}",
+                "{} {},{}{}",
                 to_int_mnemonic(width, unsigned),
                 abi_name(rd),
-                fpr_abi_name(rs1)
+                fpr_abi_name(rs1),
+                rounding_suffix(rounding)
             ),
             Instruction::IntToFp {
                 rd,
                 rs1,
                 width,
                 unsigned,
-                ..
+                rounding,
             } => format!(
-                "{} {},{}",
+                "{} {},{}{}",
                 from_int_mnemonic(width, unsigned),
                 fpr_abi_name(rd),
-                abi_name(rs1)
+                abi_name(rs1),
+                rounding_suffix(rounding)
             ),
             Instruction::FpMoveToInt { rd, rs1 } => {
                 format!("fmv.x.w {},{}", abi_name(rd), fpr_abi_name(rs1))
@@ -1907,6 +1932,30 @@ fn fp_binary_mnemonic(op: FpBinaryOp) -> &'static str {
     }
 }
 
+fn fp_binary_rounding_suffix(op: FpBinaryOp, rounding: u8) -> &'static str {
+    if matches!(
+        op,
+        FpBinaryOp::Add | FpBinaryOp::Sub | FpBinaryOp::Mul | FpBinaryOp::Div
+    ) {
+        rounding_suffix(rounding)
+    } else {
+        ""
+    }
+}
+
+/// Suffix printed by `objdump` for a floating-point rounding mode.
+fn rounding_suffix(rounding: u8) -> &'static str {
+    match rounding {
+        ROUNDING_NEAREST_EVEN => ",rne",
+        ROUNDING_TOWARD_ZERO => ",rtz",
+        ROUNDING_DOWN => ",rdn",
+        ROUNDING_UP => ",rup",
+        ROUNDING_NEAREST_MAX_MAGNITUDE => ",rmm",
+        ROUNDING_DYNAMIC => "",
+        _ => "",
+    }
+}
+
 fn fp_fused_mnemonic(op: FpFusedOp) -> &'static str {
     match op {
         FpFusedOp::Madd => "fmadd.s",
@@ -1942,16 +1991,6 @@ fn from_int_mnemonic(width: u32, unsigned: bool) -> &'static str {
         (XLEN, true) => "fcvt.s.lu",
         _ => unreachable!("F only converts 32- and 64-bit integers"),
     }
-}
-
-/// `mnemonic fd,fs1,fs2`
-fn fp_reg_op(mnemonic: &str, rd: u8, rs1: u8, rs2: u8) -> String {
-    format!(
-        "{mnemonic} {},{},{}",
-        fpr_abi_name(rd),
-        fpr_abi_name(rs1),
-        fpr_abi_name(rs2)
-    )
 }
 
 /// `mnemonic fd,offset(rs1)`

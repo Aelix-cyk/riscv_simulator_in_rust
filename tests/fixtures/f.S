@@ -41,6 +41,12 @@ _start:
 	fcvt.s.l fa5, a5
 	fmv.x.w a6, ft0
 
+	fmul.s	ft2, ft0, ft1, rup
+	fsqrt.s	ft3, ft0, rtz
+	fmadd.s	fa0, ft0, ft1, ft2, rdn
+	fcvt.w.s a4, ft0, rmm
+	fcvt.s.w fa4, a4, rne
+
 	la	t2, scratch
 	fsw	ft2, 0(t2)
 	flw	fs11, 0(t2)

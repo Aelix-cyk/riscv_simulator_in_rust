@@ -8,3 +8,5 @@
 | [0004 — c.lui renders negative immediates as 64-bit values](0004-c-lui-negative-immediate-render.md) | Fixed |
 | [0005 — zero-valued CSRRS/CSRRC sources bypass the read-only CSR check](0005-zero-csr-source-bypasses-read-only-check.md) | Fixed |
 | [0006 — execute() retires instructions without advancing mcycle](0006-execute-retires-without-advancing-mcycle.md) | Fixed |
+| [0007 — spurious underflow when a result rounds up to the minimum normal](0007-spurious-underflow-at-min-normal-boundary.md) | Fixed |
+| [0008 — trace output omits static floating-point rounding modes](0008-fp-trace-omits-static-rounding.md) | Fixed |

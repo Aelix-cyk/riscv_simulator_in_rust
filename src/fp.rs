@@ -758,12 +758,57 @@ fn round_prepared(value: Prepared, mode: RoundingMode) -> FpResult {
     }
 
     let mut exponent = value.exponent + bit_length(value.significand) as i32 - 1;
-    let exact_exponent = exponent;
     let unit_exponent = if exponent < MIN_NORMAL_EXPONENT {
         MIN_SUBNORMAL_EXPONENT
     } else {
         exponent - FRACTION_BITS as i32
     };
+    let (mut significand, inexact) = round_at_unit(value, unit_exponent, mode);
+
+    if value.tiny_subtract && exponent > MIN_NORMAL_EXPONENT && significand < HIDDEN_BIT {
+        significand = ((significand + 1) << 1) - 1;
+        exponent -= 1;
+    }
+
+    if exponent >= MIN_NORMAL_EXPONENT && significand >= HIDDEN_BIT * 2 {
+        significand >>= 1;
+        exponent += 1;
+    }
+    if exponent > MAX_NORMAL_EXPONENT {
+        let toward_infinity = match mode {
+            RoundingMode::NearestEven | RoundingMode::NearestMaxMagnitude => true,
+            RoundingMode::TowardZero => false,
+            RoundingMode::Down => value.negative,
+            RoundingMode::Up => !value.negative,
+        };
+        return FpResult {
+            bits: if toward_infinity {
+                infinity(value.negative)
+            } else {
+                let sign = if value.negative { SIGN_MASK } else { 0 };
+                sign | MAX_FINITE
+            },
+            flags: FLAG_OF | FLAG_NX,
+        };
+    }
+
+    let mut flags = if inexact { FLAG_NX } else { 0 };
+    let bits = if exponent < MIN_NORMAL_EXPONENT || significand < HIDDEN_BIT {
+        if inexact && is_tiny_after_rounding(value, mode) {
+            flags |= FLAG_UF;
+        }
+        (if value.negative { SIGN_MASK } else { 0 }) | significand as u32
+    } else {
+        let unbiased = exponent;
+        let exponent_bits = (unbiased + EXPONENT_BIAS) as u32;
+        (if value.negative { SIGN_MASK } else { 0 })
+            | (exponent_bits << FRACTION_BITS)
+            | (significand as u32 & FRACTION_MASK)
+    };
+    FpResult { bits, flags }
+}
+
+fn round_at_unit(value: Prepared, unit_exponent: i32, mode: RoundingMode) -> (u128, bool) {
     let shift = unit_exponent - value.exponent;
     let (mut significand, inexact, half_order, exact_half) = if value.tiny_subtract {
         if shift <= 0 {
@@ -830,11 +875,6 @@ fn round_prepared(value: Prepared, mode: RoundingMode) -> FpResult {
         )
     };
 
-    if value.tiny_subtract && exponent > MIN_NORMAL_EXPONENT && significand < HIDDEN_BIT {
-        significand = ((significand + 1) << 1) - 1;
-        exponent -= 1;
-    }
-
     let increment = inexact
         && match mode {
             RoundingMode::NearestEven => {
@@ -848,48 +888,24 @@ fn round_prepared(value: Prepared, mode: RoundingMode) -> FpResult {
     if increment {
         significand += 1;
     }
+    (significand, inexact)
+}
 
-    if exponent >= MIN_NORMAL_EXPONENT && significand >= HIDDEN_BIT * 2 {
-        significand >>= 1;
-        exponent += 1;
+fn is_tiny_after_rounding(value: Prepared, mode: RoundingMode) -> bool {
+    let mut normalized_exponent = value.exponent + bit_length(value.significand) as i32 - 1;
+    if value.tiny_subtract && value.significand.is_power_of_two() {
+        normalized_exponent -= 1;
     }
-    if exponent > MAX_NORMAL_EXPONENT {
-        let toward_infinity = match mode {
-            RoundingMode::NearestEven | RoundingMode::NearestMaxMagnitude => true,
-            RoundingMode::TowardZero => false,
-            RoundingMode::Down => value.negative,
-            RoundingMode::Up => !value.negative,
-        };
-        return FpResult {
-            bits: if toward_infinity {
-                infinity(value.negative)
-            } else {
-                let sign = if value.negative { SIGN_MASK } else { 0 };
-                sign | MAX_FINITE
-            },
-            flags: FLAG_OF | FLAG_NX,
-        };
+    if normalized_exponent < MIN_NORMAL_EXPONENT - 1 {
+        return true;
+    }
+    if normalized_exponent > MIN_NORMAL_EXPONENT - 1 {
+        return false;
     }
 
-    let mut flags = if inexact { FLAG_NX } else { 0 };
-    let bits = if exponent < MIN_NORMAL_EXPONENT || significand < HIDDEN_BIT {
-        let directed_outward = matches!(mode, RoundingMode::Up) && !value.negative
-            || matches!(mode, RoundingMode::Down) && value.negative && half_order.is_lt();
-        let tiny_after_rounding = exact_exponent + 1 < MIN_NORMAL_EXPONENT
-            || significand < HIDDEN_BIT
-            || significand == HIDDEN_BIT && directed_outward;
-        if inexact && tiny_after_rounding {
-            flags |= FLAG_UF;
-        }
-        (if value.negative { SIGN_MASK } else { 0 }) | significand as u32
-    } else {
-        let unbiased = exponent;
-        let exponent_bits = (unbiased + EXPONENT_BIAS) as u32;
-        (if value.negative { SIGN_MASK } else { 0 })
-            | (exponent_bits << FRACTION_BITS)
-            | (significand as u32 & FRACTION_MASK)
-    };
-    FpResult { bits, flags }
+    let unbounded_quantum = MIN_SUBNORMAL_EXPONENT - 1;
+    let (significand, _) = round_at_unit(value, unbounded_quantum, mode);
+    significand < HIDDEN_BIT * 2
 }
 
 fn remainder_order(significand: u128, shift: u32, sticky: Sticky) -> std::cmp::Ordering {
@@ -1099,6 +1115,67 @@ mod tests {
         );
         assert_eq!(tiny.flags & FLAG_UF, FLAG_UF);
         assert_eq!(tiny.flags & FLAG_NX, FLAG_NX);
+    }
+
+    #[test]
+    fn minimum_normal_result_is_not_tiny_when_rounded_upward() {
+        let result = mul(0x0080_0001, 0x3f7f_fffe, RoundingMode::Up);
+
+        assert_eq!(result.bits, MIN_NORMAL);
+        assert_eq!(result.flags, FLAG_NX);
+    }
+
+    #[test]
+    fn minimum_normal_division_keeps_underflow_when_unbounded_result_is_tiny() {
+        let result = div(MIN_NORMAL, 0x3f80_0001, RoundingMode::Up);
+
+        assert_eq!(result.bits, MIN_NORMAL);
+        assert_eq!(result.flags, FLAG_NX | FLAG_UF);
+    }
+
+    #[test]
+    fn minimum_normal_fused_keeps_underflow_when_unbounded_result_is_tiny() {
+        let result = fma(
+            HALF,
+            0x0000_0001,
+            0x007f_ffff,
+            RoundingMode::Up,
+            false,
+            false,
+        );
+
+        assert_eq!(result.bits, MIN_NORMAL);
+        assert_eq!(result.flags, FLAG_NX | FLAG_UF);
+    }
+
+    #[test]
+    fn minimum_normal_fused_result_is_not_tiny_after_nearest_rounding() {
+        let result = fma(
+            MIN_NORMAL,
+            0x2e22_f7b6,
+            0x8080_0000,
+            RoundingMode::NearestEven,
+            false,
+            false,
+        );
+
+        assert_eq!(result.bits, 0x8080_0000);
+        assert_eq!(result.flags, FLAG_NX);
+    }
+
+    #[test]
+    fn minimum_normal_fused_toward_positive_keeps_underflow_for_subnormal_result() {
+        let result = fma(
+            MIN_NORMAL,
+            0x09a7_f05c,
+            0x8080_0000,
+            RoundingMode::Up,
+            false,
+            false,
+        );
+
+        assert_eq!(result.bits, 0x807f_ffff);
+        assert_eq!(result.flags, FLAG_NX | FLAG_UF);
     }
 
     #[test]
