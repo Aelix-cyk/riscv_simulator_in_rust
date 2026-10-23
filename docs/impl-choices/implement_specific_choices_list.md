@@ -17,7 +17,7 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Reset value of GPRs and CSRs | All zero | Decided |
 | IALIGN | 16; Zca provides compressed instructions, so branch and jump targets need only be two-byte aligned | Decided |
 | Behaviour on a misaligned instruction address | Raise an instruction-address-misaligned exception when the PC or control-transfer target is not two-byte aligned | Decided |
-| `misa` | WARL RV64IMAFCU: `MXL = 2`, with A, C, F, I, M, and U fixed; writes are accepted and ignored | Decided |
+| `misa` | WARL RV64IMAFDCU: `MXL = 2`, with A, C, D, F, I, M, and U fixed; writes are accepted and ignored | Decided |
 | `mvendorid`, `marchid`, `mimpid` | Read-only zero | Decided |
 | Physical address width | Registers are 64-bit; the implemented physical space is the single DRAM region below | Decided |
 

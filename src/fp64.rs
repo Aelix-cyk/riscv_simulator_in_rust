@@ -24,11 +24,18 @@ const WORKING_BITS: u32 = 126;
 const BITS_PER_U128: u32 = u128::BITS;
 const WORD_BITS: u32 = 32;
 const DOUBLEWORD_BITS: u32 = 64;
+const SINGLE_EXPONENT_BITS: u32 = 8;
 const SINGLE_FRACTION_BITS: u32 = 23;
+const SINGLE_SIGN_MASK: u32 = 1 << (SINGLE_FRACTION_BITS + SINGLE_EXPONENT_BITS);
+const SINGLE_ALL_ONES_EXPONENT: u32 = (1 << SINGLE_EXPONENT_BITS) - 1;
+const SINGLE_FRACTION_MASK: u32 = (1 << SINGLE_FRACTION_BITS) - 1;
+const SINGLE_QUIET_BIT: u32 = 1 << (SINGLE_FRACTION_BITS - 1);
 const SINGLE_EXPONENT_BIAS: i32 = 127;
 const SINGLE_MIN_NORMAL_EXPONENT: i32 = -126;
 const SINGLE_MAX_NORMAL_EXPONENT: i32 = 127;
 const SINGLE_MIN_SUBNORMAL_EXPONENT: i32 = -149;
+const SINGLE_SIGN_SHIFT: u32 = u64::BITS - (SINGLE_FRACTION_BITS + SINGLE_EXPONENT_BITS + 1);
+const SINGLE_FRACTION_SHIFT: u32 = FRACTION_BITS - SINGLE_FRACTION_BITS;
 
 /// Result bits and newly raised IEEE flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -497,13 +504,13 @@ pub(crate) fn to_int(a: u64, width: u32, unsigned: bool, mode: RoundingMode) -> 
 
 /// Widens a single-precision value to double precision.
 pub(crate) fn from_single(a: u32) -> DoubleResult {
-    let sign = u64::from(a & 0x8000_0000) << 32;
-    let exponent = (a >> 23) & 0xff;
-    let fraction = a & 0x007f_ffff;
+    let sign = u64::from(a & SINGLE_SIGN_MASK) << SINGLE_SIGN_SHIFT;
+    let exponent = (a >> SINGLE_FRACTION_BITS) & SINGLE_ALL_ONES_EXPONENT;
+    let fraction = a & SINGLE_FRACTION_MASK;
     let bits = match exponent {
-        0xff if fraction == 0 => sign | EXPONENT_MASK,
-        0xff => {
-            let flags = if fraction & (1 << 22) == 0 {
+        SINGLE_ALL_ONES_EXPONENT if fraction == 0 => sign | EXPONENT_MASK,
+        SINGLE_ALL_ONES_EXPONENT => {
+            let flags = if fraction & SINGLE_QUIET_BIT == 0 {
                 FLAG_NV
             } else {
                 0
@@ -523,8 +530,9 @@ pub(crate) fn from_single(a: u32) -> DoubleResult {
             sign | (exponent_field << FRACTION_BITS) | (normalized & FRACTION_MASK)
         }
         _ => {
-            let exponent = exponent as i32 - 127 + EXPONENT_BIAS;
-            sign | (u64::from(exponent as u32) << FRACTION_BITS) | (u64::from(fraction) << 29)
+            let exponent = exponent as i32 - SINGLE_EXPONENT_BIAS + EXPONENT_BIAS;
+            sign | (u64::from(exponent as u32) << FRACTION_BITS)
+                | (u64::from(fraction) << SINGLE_FRACTION_SHIFT)
         }
     };
     DoubleResult::exact(bits)
