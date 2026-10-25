@@ -10,10 +10,12 @@ the Zba/Zbb/Zbs bit-manipulation instructions,
 single- and double-precision floating point, Zca/Zcd compressed instructions,
 branches, jumps, loads and stores,
 `fence`/`fence.i`, the six CSR read/modify/write forms, and deterministic cycle,
-time, and instruction counters. Synchronous exceptions, including `ecall` and
-`ebreak`, enter a machine-mode handler through `mtvec`. Implemented CSRs include
-WARL `misa` (RV64IMAFDCBU), `fcsr`/`fflags`/`frm`, machine
-identity/status/trap/delegation registers, and counter controls. The target
+time, instruction, and three event-selectable hardware performance counters.
+Synchronous exceptions, including `ecall` and `ebreak`, enter a machine-mode
+handler through `mtvec`. Implemented CSRs include WARL `misa`
+(RV64IMAFDCBU), `fcsr`/`fflags`/`frm`, machine identity/status/trap/delegation
+registers, and counter controls. HPM counters select retired instructions,
+loads, stores, and branches/jumps through one-hot event masks. The target
 profile is RVA22S64, built up progressively: see `GLOSSARY.md` for terminology,
 `docs/impl-choices/` for the requirements and the choices the specification
 leaves open.

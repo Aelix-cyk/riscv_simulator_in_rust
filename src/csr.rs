@@ -48,10 +48,20 @@ const CSR_READ_ONLY: u16 = 0b11;
 const COUNTER_CY_BIT: u64 = 1 << 0;
 const COUNTER_TM_BIT: u64 = 1 << 1;
 const COUNTER_IR_BIT: u64 = 1 << 2;
-const COUNTER_ENABLE_MASK: u64 = COUNTER_CY_BIT | COUNTER_TM_BIT | COUNTER_IR_BIT;
+const HPM_COUNTER_FIRST: u16 = 3;
+const HPM_COUNTER_COUNT: usize = 3;
+const HPM_COUNTER_BITS: u64 = ((1 << HPM_COUNTER_COUNT) - 1) << HPM_COUNTER_FIRST;
+const COUNTER_ENABLE_MASK: u64 =
+    COUNTER_CY_BIT | COUNTER_TM_BIT | COUNTER_IR_BIT | HPM_COUNTER_BITS;
 const MCOUNTINHIBIT_CY_BIT: u64 = 1 << 0;
 const MCOUNTINHIBIT_IR_BIT: u64 = 1 << 2;
-const MCOUNTINHIBIT_MASK: u64 = MCOUNTINHIBIT_CY_BIT | MCOUNTINHIBIT_IR_BIT;
+const MCOUNTINHIBIT_MASK: u64 = MCOUNTINHIBIT_CY_BIT | MCOUNTINHIBIT_IR_BIT | HPM_COUNTER_BITS;
+const HPM_EVENT_BITS: u32 = 4;
+const HPM_EVENT_MASK: u64 = (1 << HPM_EVENT_BITS) - 1;
+pub(crate) const HPM_EVENT_INSTRUCTION: u8 = 1 << 0;
+pub(crate) const HPM_EVENT_LOAD: u8 = 1 << 1;
+pub(crate) const HPM_EVENT_STORE: u8 = 1 << 2;
+pub(crate) const HPM_EVENT_BRANCH: u8 = 1 << 3;
 const FFLAGS_BITS: u32 = 5;
 const FFLAGS_MASK: u64 = (1 << FFLAGS_BITS) - 1;
 const FRM_SHIFT: u32 = FFLAGS_BITS;
@@ -78,6 +88,8 @@ pub(crate) struct Csrs {
     mip: u64,
     mcounteren: u64,
     mcountinhibit: u64,
+    mhpmcounters: [u64; HPM_COUNTER_COUNT],
+    mhpmevents: [u64; HPM_COUNTER_COUNT],
     mcycle: u64,
     minstret: u64,
     fcsr: u64,
@@ -111,7 +123,8 @@ impl Csrs {
             inst::CSR_MIDELEG => Some(self.mideleg),
             inst::CSR_MCOUNTEREN => Some(self.mcounteren),
             inst::CSR_MCOUNTINHIBIT => Some(self.mcountinhibit),
-            inst::CSR_MENVCFG | inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => Some(0),
+            inst::CSR_MENVCFG => Some(0),
+            inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => self.read_mhpmevent(address),
             inst::CSR_PMPCFG0 => Some(self.pmpcfg0),
             inst::CSR_PMPADDR0 => Some(self.pmpaddr0),
             inst::CSR_MNSTATUS => Some(self.mnstatus),
@@ -120,6 +133,8 @@ impl Csrs {
             inst::CSR_INSTRET => Some(self.minstret),
             inst::CSR_MCYCLE => Some(self.mcycle),
             inst::CSR_MINSTRET => Some(self.minstret),
+            inst::CSR_HPMCOUNTER3..=inst::CSR_HPMCOUNTER31 => self.read_hpmcounter(address),
+            inst::CSR_MHPMCOUNTER3..=inst::CSR_MHPMCOUNTER31 => self.read_mhpmcounter(address),
             inst::CSR_FFLAGS => Some(self.fcsr & FFLAGS_MASK),
             inst::CSR_FRM => Some((self.fcsr & FRM_MASK) >> FRM_SHIFT),
             inst::CSR_FCSR => Some(self.fcsr),
@@ -177,12 +192,18 @@ impl Csrs {
             inst::CSR_MIDELEG => self.mideleg = value,
             inst::CSR_MCOUNTEREN => self.mcounteren = value & COUNTER_ENABLE_MASK,
             inst::CSR_MCOUNTINHIBIT => self.mcountinhibit = value & MCOUNTINHIBIT_MASK,
-            inst::CSR_MENVCFG | inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => {}
+            inst::CSR_MENVCFG => {}
+            inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => {
+                self.write_mhpmevent(address, value);
+            }
             inst::CSR_PMPCFG0 => self.pmpcfg0 = value,
             inst::CSR_PMPADDR0 => self.pmpaddr0 = value,
             inst::CSR_MNSTATUS => self.mnstatus = value,
             inst::CSR_MCYCLE => self.mcycle = value,
             inst::CSR_MINSTRET => self.minstret = value,
+            inst::CSR_MHPMCOUNTER3..=inst::CSR_MHPMCOUNTER31 => {
+                self.write_mhpmcounter(address, value);
+            }
             // Only Bare translation is implemented.
             inst::CSR_SATP => {}
             _ => return false,
@@ -203,6 +224,12 @@ impl Csrs {
             inst::CSR_INSTRET => {
                 privilege == PrivilegeMode::Machine
                     || (privilege == PrivilegeMode::User && self.mcounteren & COUNTER_IR_BIT != 0)
+            }
+            inst::CSR_HPMCOUNTER3..=inst::CSR_HPMCOUNTER31 => {
+                let index = usize::from(address - inst::CSR_HPMCOUNTER3);
+                privilege == PrivilegeMode::Machine
+                    || (privilege == PrivilegeMode::User
+                        && self.mcounteren & (1 << (HPM_COUNTER_FIRST as usize + index)) != 0)
             }
             inst::CSR_FFLAGS | inst::CSR_FRM | inst::CSR_FCSR => self.fp_enabled(),
             _ => {
@@ -250,6 +277,58 @@ impl Csrs {
         if self.mcountinhibit & MCOUNTINHIBIT_IR_BIT == 0 {
             self.minstret = self.minstret.wrapping_add(1);
         }
+    }
+
+    /// Records retirement events in the enabled hardware performance counters.
+    pub(crate) fn record_retirement(&mut self, events: u8, written_csr: Option<u16>) {
+        if written_csr != Some(inst::CSR_MINSTRET) {
+            self.retire_instruction();
+        }
+        for (index, (counter, selector)) in self
+            .mhpmcounters
+            .iter_mut()
+            .zip(self.mhpmevents.iter())
+            .enumerate()
+        {
+            let inhibit = 1 << (HPM_COUNTER_FIRST as usize + index);
+            let written = (inst::CSR_MHPMCOUNTER3 as usize + index)
+                == written_csr.map_or(usize::MAX, usize::from);
+            if !written && self.mcountinhibit & inhibit == 0 && selector & u64::from(events) != 0 {
+                *counter = counter.wrapping_add(1);
+            }
+        }
+    }
+
+    fn read_mhpmevent(self, address: u16) -> Option<u64> {
+        self.hpm_index(address, inst::CSR_MHPMEVENT3)
+            .map_or(Some(0), |index| Some(self.mhpmevents[index]))
+    }
+
+    fn read_hpmcounter(self, address: u16) -> Option<u64> {
+        self.hpm_index(address, inst::CSR_HPMCOUNTER3)
+            .map_or(Some(0), |index| Some(self.mhpmcounters[index]))
+    }
+
+    fn read_mhpmcounter(self, address: u16) -> Option<u64> {
+        self.hpm_index(address, inst::CSR_MHPMCOUNTER3)
+            .map_or(Some(0), |index| Some(self.mhpmcounters[index]))
+    }
+
+    fn write_mhpmevent(&mut self, address: u16, value: u64) {
+        if let Some(index) = self.hpm_index(address, inst::CSR_MHPMEVENT3) {
+            self.mhpmevents[index] = value & HPM_EVENT_MASK;
+        }
+    }
+
+    fn write_mhpmcounter(&mut self, address: u16, value: u64) {
+        if let Some(index) = self.hpm_index(address, inst::CSR_MHPMCOUNTER3) {
+            self.mhpmcounters[index] = value;
+        }
+    }
+
+    fn hpm_index(self, address: u16, first_address: u16) -> Option<usize> {
+        let index = usize::from(address.checked_sub(first_address)?);
+        (index < HPM_COUNTER_COUNT).then_some(index)
     }
 
     /// Records a synchronous machine-mode trap.
@@ -423,6 +502,61 @@ mod tests {
 
         assert_eq!(csrs.read(inst::CSR_MCYCLE), Some(0));
         assert_eq!(csrs.read(inst::CSR_MINSTRET), Some(0));
+    }
+
+    #[test]
+    fn hpm_csrs_apply_masks_and_expose_shadows() {
+        let mut csrs = Csrs::default();
+
+        assert!(csrs.write(inst::CSR_MHPMEVENT3, u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MHPMEVENT3), Some(HPM_EVENT_MASK));
+        assert!(csrs.write(inst::CSR_MHPMCOUNTER3, 0x0123_4567_89ab_cdef));
+        assert_eq!(
+            csrs.read(inst::CSR_MHPMCOUNTER3),
+            Some(0x0123_4567_89ab_cdef)
+        );
+        assert_eq!(
+            csrs.read(inst::CSR_HPMCOUNTER3),
+            Some(0x0123_4567_89ab_cdef)
+        );
+
+        assert!(csrs.write(inst::CSR_MHPMEVENT6, u64::MAX));
+        assert!(csrs.write(inst::CSR_MHPMCOUNTER6, u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MHPMEVENT6), Some(0));
+        assert_eq!(csrs.read(inst::CSR_MHPMCOUNTER6), Some(0));
+        assert_eq!(csrs.read(inst::CSR_HPMCOUNTER31), Some(0));
+
+        assert!(csrs.write(inst::CSR_MCOUNTEREN, u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MCOUNTEREN), Some(COUNTER_ENABLE_MASK));
+        assert!(csrs.write(inst::CSR_MCOUNTINHIBIT, u64::MAX));
+        assert_eq!(csrs.read(inst::CSR_MCOUNTINHIBIT), Some(MCOUNTINHIBIT_MASK));
+    }
+
+    #[test]
+    fn hpm_counters_record_matching_events_and_wrap() {
+        let mut csrs = Csrs::default();
+        assert!(csrs.write(
+            inst::CSR_MHPMEVENT3,
+            u64::from(HPM_EVENT_INSTRUCTION | HPM_EVENT_LOAD)
+        ));
+        assert!(csrs.write(inst::CSR_MHPMEVENT4, u64::from(HPM_EVENT_STORE)));
+        assert!(csrs.write(
+            inst::CSR_MHPMEVENT5,
+            u64::from(HPM_EVENT_INSTRUCTION | HPM_EVENT_BRANCH)
+        ));
+        assert!(csrs.write(inst::CSR_MHPMCOUNTER3, u64::MAX));
+
+        csrs.record_retirement(HPM_EVENT_INSTRUCTION | HPM_EVENT_LOAD, None);
+        csrs.record_retirement(HPM_EVENT_INSTRUCTION | HPM_EVENT_BRANCH, None);
+
+        assert_eq!(csrs.read(inst::CSR_MHPMCOUNTER3), Some(1));
+        assert_eq!(csrs.read(inst::CSR_MHPMCOUNTER4), Some(0));
+        assert_eq!(csrs.read(inst::CSR_MHPMCOUNTER5), Some(2));
+        assert_eq!(csrs.read(inst::CSR_MINSTRET), Some(2));
+
+        csrs.record_retirement(HPM_EVENT_INSTRUCTION, Some(inst::CSR_MHPMCOUNTER3));
+        assert_eq!(csrs.read(inst::CSR_MHPMCOUNTER3), Some(1));
+        assert_eq!(csrs.read(inst::CSR_MINSTRET), Some(3));
     }
 
     #[test]

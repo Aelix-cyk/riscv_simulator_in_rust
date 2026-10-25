@@ -13,6 +13,7 @@ category and listed alphabetically within each section.
 - **funct3** — A 3-bit field in most instruction encodings that selects the specific operation within an opcode.
 - **funct7** — A 7-bit field that further distinguishes R-type operations sharing an opcode and funct3.
 - **Halfword** — A 16-bit value, two consecutive bytes.
+- **Hardware performance counter (HPM)** — A configurable CSR that counts a selected architectural event, such as retired instructions or memory accesses.
 - **Immediate** — A constant value encoded directly inside an instruction rather than read from a register.
 - **Instruction format** — One of the fixed bit layouts (R, I, S, B, U, J) that determines where fields and immediates sit in a 32-bit encoding.
 - **ISA** — Instruction Set Architecture: the contract of instructions, registers, and memory behavior a processor implements.

@@ -41,9 +41,10 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Privilege transitions | `mret` enters the mode recorded in `mstatus.MPP`; M-mode CSR access from U-mode raises illegal-instruction | Decided |
 | Interrupt controller | None | Open |
 | Timer facility | None; the profile deliberately leaves Sstc optional | Open |
-| Number of hardware performance counters | `Zihpm` is mandatory, but the count is a choice | Open |
+| Number of hardware performance counters | Three: `hpmcounter3`–`hpmcounter5`; counters 6–31 are read-only zero | Decided |
+| Hardware performance events | One-hot selector bits for retired instructions, loads, stores, and branches/jumps; faulting attempts do not count | Decided |
 | Base counters | Full 64-bit `mcycle` and `minstret`, with `cycle`, `time`, and `instret` aliases; `time` mirrors `mcycle` | Decided |
-| Counter access control | `mcounteren` gates U-mode reads for `cycle`, `time`, and `instret`; `mcountinhibit` stops counting | Decided |
+| Counter access control | `mcounteren` gates U-mode reads; `mcountinhibit` stops base and HPM counting | Decided |
 | `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; the profile allows `PAUSE` to execute as a NOP | Open |
 | Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
 

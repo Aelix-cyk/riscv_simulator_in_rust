@@ -2,6 +2,7 @@
 
 use crate::bus::Bus;
 use crate::cpu::{Cpu, PrivilegeMode, X0};
+use crate::csr;
 use crate::decode::{
     DecodedInstruction, FpBinaryOp, FpCompareOp, FpFormat, FpFusedOp, Instruction, decode_word,
     is_compressed,
@@ -242,13 +243,13 @@ impl<B: Bus> Machine<B> {
     /// Executes an instruction with the exact fetched encoding available for
     /// `mtval`, then delivers any synchronous exception to the trap handler.
     fn execute_with_decoded(&mut self, decoded: DecodedInstruction) -> bool {
-        let writes_cycle = csr_write_target(decoded.instruction()) == Some(inst::CSR_MCYCLE);
-        let writes_instret = csr_write_target(decoded.instruction()) == Some(inst::CSR_MINSTRET);
+        let instruction = decoded.instruction();
+        let written_csr = csr_write_target(instruction);
+        let writes_cycle = written_csr == Some(inst::CSR_MCYCLE);
+        let events = retirement_events(instruction);
         match self.execute_inner(decoded) {
             Ok(()) => {
-                if !writes_instret {
-                    self.cpu.csrs_mut().retire_instruction();
-                }
+                self.cpu.csrs_mut().record_retirement(events, written_csr);
                 if !writes_cycle {
                     self.cpu.csrs_mut().advance_cycle();
                 }
@@ -1673,6 +1674,72 @@ fn shift_32(value: u64) -> u32 {
     (value & 0x1f) as u32
 }
 
+/// Event categories produced by one successfully retired instruction.
+fn retirement_events(instruction: Instruction) -> u8 {
+    let mut events = csr::HPM_EVENT_INSTRUCTION;
+    if matches!(
+        instruction,
+        Instruction::Lb { .. }
+            | Instruction::Lh { .. }
+            | Instruction::Lw { .. }
+            | Instruction::Ld { .. }
+            | Instruction::Lbu { .. }
+            | Instruction::Lhu { .. }
+            | Instruction::Lwu { .. }
+            | Instruction::Flw { .. }
+            | Instruction::Fld { .. }
+            | Instruction::LrW { .. }
+            | Instruction::LrD { .. }
+    ) {
+        events |= csr::HPM_EVENT_LOAD;
+    }
+    if matches!(
+        instruction,
+        Instruction::Sb { .. }
+            | Instruction::Sh { .. }
+            | Instruction::Sw { .. }
+            | Instruction::Sd { .. }
+            | Instruction::Fsw { .. }
+            | Instruction::Fsd { .. }
+            | Instruction::ScW { .. }
+            | Instruction::ScD { .. }
+            | Instruction::AmoSwapW { .. }
+            | Instruction::AmoAddW { .. }
+            | Instruction::AmoXorW { .. }
+            | Instruction::AmoOrW { .. }
+            | Instruction::AmoAndW { .. }
+            | Instruction::AmoMinW { .. }
+            | Instruction::AmoMaxW { .. }
+            | Instruction::AmoMinuW { .. }
+            | Instruction::AmoMaxuW { .. }
+            | Instruction::AmoSwapD { .. }
+            | Instruction::AmoAddD { .. }
+            | Instruction::AmoXorD { .. }
+            | Instruction::AmoOrD { .. }
+            | Instruction::AmoAndD { .. }
+            | Instruction::AmoMinD { .. }
+            | Instruction::AmoMaxD { .. }
+            | Instruction::AmoMinuD { .. }
+            | Instruction::AmoMaxuD { .. }
+    ) {
+        events |= csr::HPM_EVENT_STORE;
+    }
+    if matches!(
+        instruction,
+        Instruction::Beq { .. }
+            | Instruction::Bne { .. }
+            | Instruction::Blt { .. }
+            | Instruction::Bge { .. }
+            | Instruction::Bltu { .. }
+            | Instruction::Bgeu { .. }
+            | Instruction::Jal { .. }
+            | Instruction::Jalr { .. }
+    ) {
+        events |= csr::HPM_EVENT_BRANCH;
+    }
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1692,6 +1759,7 @@ mod tests {
     const COUNTER_RELOAD_VALUE: u64 = 5;
     const COUNTER_CY_ENABLE: u64 = 1;
     const CYCLE_RELOAD_VALUE: u64 = 42;
+    const HPM_COUNTER_3_BIT: u64 = 1 << 3;
     const FP_INITIAL_STATUS: u64 = 1 << 13;
     const FP_DIRTY_STATUS: u64 = 0b11 << 13;
     const FADD_FT2_FT0_FT1: u32 = 0x0010_7153;
@@ -3085,7 +3153,7 @@ mod tests {
     fn unsupported_csr_traps_before_writing_rd_or_csr_state() {
         let instruction = Instruction::Csrrs {
             rd: 5,
-            csr: inst::CSR_MHPMCOUNTER3,
+            csr: inst::CSR_MCYCLEH,
             rs1: 0,
         };
         let mut machine = trapped_machine();
@@ -3405,5 +3473,300 @@ mod tests {
         assert_eq!(machine.cpu().read_gpr(9), 0x0100_ff00_0000_8000);
         assert_eq!(machine.cpu().read_gpr(10), 1 << 63);
         assert_eq!(machine.cpu().read_gpr(11), 0);
+    }
+
+    #[test]
+    fn hpm_counters_count_selected_retirement_events() {
+        let mut machine = machine();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(1, DRAM_BASE);
+        machine
+            .bus_mut()
+            .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef)
+            .unwrap();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT3, csr::HPM_EVENT_INSTRUCTION.into())
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT4, csr::HPM_EVENT_LOAD.into())
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT5, csr::HPM_EVENT_BRANCH.into())
+        );
+
+        machine.execute(Instruction::Addi {
+            rd: 2,
+            rs1: 0,
+            imm: 1,
+        });
+        machine.execute(Instruction::Lw {
+            rd: 3,
+            rs1: 1,
+            offset: 8,
+        });
+        machine.execute(Instruction::Beq {
+            rs1: 0,
+            rs2: 0,
+            offset: 0,
+        });
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT5, csr::HPM_EVENT_STORE.into())
+        );
+        machine.execute(Instruction::Sw {
+            rs2: 0,
+            rs1: 1,
+            offset: 8,
+        });
+
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER3), Some(4));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER4), Some(1));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER5), Some(2));
+    }
+
+    #[test]
+    fn hpm_counters_honor_enable_and_inhibit_bits() {
+        let mut machine = machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT3, csr::HPM_EVENT_INSTRUCTION.into())
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT4, csr::HPM_EVENT_LOAD.into())
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MCOUNTINHIBIT, HPM_COUNTER_3_BIT)
+        );
+
+        machine.execute(Instruction::Addi {
+            rd: 2,
+            rs1: 0,
+            imm: 1,
+        });
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER3), Some(0));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(1));
+
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MCOUNTINHIBIT, 0));
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MCOUNTEREN, HPM_COUNTER_3_BIT)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::User);
+        assert_eq!(machine.cpu().read_csr(inst::CSR_HPMCOUNTER3), Some(0));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_HPMCOUNTER4), None);
+        assert_eq!(machine.cpu().read_csr(inst::CSR_HPMCOUNTER5), None);
+        assert!(!machine.cpu_mut().write_csr(inst::CSR_MHPMCOUNTER3, 1));
+    }
+
+    #[test]
+    fn hpm_counters_ignore_faulting_and_unselected_instructions() {
+        let mut machine = trapped_machine();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(1, DRAM_BASE);
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT3, csr::HPM_EVENT_LOAD.into())
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT4, csr::HPM_EVENT_STORE.into())
+        );
+        assert!(machine.cpu_mut().write_csr(
+            inst::CSR_MHPMEVENT5,
+            u64::from(csr::HPM_EVENT_INSTRUCTION | csr::HPM_EVENT_BRANCH)
+        ));
+
+        machine.execute(Instruction::Lw {
+            rd: 2,
+            rs1: 1,
+            offset: -0x100,
+        });
+
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER3), Some(0));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER4), Some(0));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER5), Some(0));
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(u64::from(inst::CAUSE_LOAD_ACCESS))
+        );
+    }
+
+    #[test]
+    fn hpm_memory_events_include_floating_and_atomic_operations() {
+        let cases = [
+            (
+                Instruction::Lw {
+                    rd: 2,
+                    rs1: 1,
+                    offset: 8,
+                },
+                true,
+                false,
+            ),
+            (
+                Instruction::Flw {
+                    rd: 2,
+                    rs1: 1,
+                    offset: 8,
+                },
+                true,
+                false,
+            ),
+            (
+                Instruction::LrW {
+                    rd: 2,
+                    rs1: 1,
+                    aq: false,
+                    rl: false,
+                },
+                true,
+                false,
+            ),
+            (
+                Instruction::Sw {
+                    rs2: 0,
+                    rs1: 1,
+                    offset: 8,
+                },
+                false,
+                true,
+            ),
+            (
+                Instruction::Fsw {
+                    rs2: 0,
+                    rs1: 1,
+                    offset: 8,
+                },
+                false,
+                true,
+            ),
+            (
+                Instruction::ScW {
+                    rd: 2,
+                    rs1: 1,
+                    rs2: 0,
+                    aq: false,
+                    rl: false,
+                },
+                false,
+                true,
+            ),
+            (
+                Instruction::AmoAddW {
+                    rd: 2,
+                    rs1: 1,
+                    rs2: 0,
+                    aq: false,
+                    rl: false,
+                },
+                false,
+                true,
+            ),
+        ];
+
+        for (instruction, load, store) in cases {
+            let mut machine = machine();
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+            );
+            machine.cpu_mut().set_pc(DRAM_BASE);
+            machine.cpu_mut().write_gpr(1, DRAM_BASE);
+            machine
+                .bus_mut()
+                .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef)
+                .unwrap();
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MHPMEVENT3, csr::HPM_EVENT_LOAD.into())
+            );
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MHPMEVENT4, csr::HPM_EVENT_STORE.into())
+            );
+
+            machine.execute(instruction);
+
+            assert_eq!(
+                machine.cpu().read_csr(inst::CSR_MHPMCOUNTER3),
+                Some(u64::from(load)),
+                "{instruction:?}"
+            );
+            assert_eq!(
+                machine.cpu().read_csr(inst::CSR_MHPMCOUNTER4),
+                Some(u64::from(store)),
+                "{instruction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hpm_control_transfer_events_include_jumps() {
+        for instruction in [
+            Instruction::Beq {
+                rs1: 0,
+                rs2: 0,
+                offset: 0,
+            },
+            Instruction::Jal { rd: 2, offset: 0 },
+            Instruction::Jalr {
+                rd: 2,
+                rs1: 0,
+                offset: DRAM_BASE as i64,
+            },
+        ] {
+            let mut machine = machine();
+            machine.cpu_mut().set_pc(DRAM_BASE);
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MHPMEVENT5, csr::HPM_EVENT_BRANCH.into())
+            );
+
+            machine.execute(instruction);
+
+            assert_eq!(
+                machine.cpu().read_csr(inst::CSR_MHPMCOUNTER5),
+                Some(1),
+                "{instruction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hpm_counter_write_suppresses_its_own_event_increment() {
+        let mut machine = machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MHPMEVENT3, csr::HPM_EVENT_INSTRUCTION.into())
+        );
+        machine.cpu_mut().write_gpr(1, 42);
+
+        machine.execute(Instruction::Csrrw {
+            rd: 0,
+            csr: inst::CSR_MHPMCOUNTER3,
+            rs1: 1,
+        });
+
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER3), Some(42));
     }
 }
