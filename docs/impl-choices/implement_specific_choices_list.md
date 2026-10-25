@@ -48,6 +48,25 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; the profile allows `PAUSE` to execute as a NOP | Open |
 | Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
 
+### HPM event selector encoding
+
+`mhpmevent3`–`mhpmevent5` use the same 4-bit WARL one-hot bitmask encoding.
+Bits are independent, and any combination is legal:
+
+| Bit | Retired event |
+|---|---|
+| 0 | Every successfully retired instruction |
+| 1 | Loads, including floating loads and LR |
+| 2 | Stores, including floating stores, SC, and AMOs |
+| 3 | Branches and jumps, whether or not control flow changes |
+
+A selector value of `0` disables its counter. Each configured counter increments
+at most once per retired instruction even when several selected categories
+match. Faulting or trapping attempts do not increment any HPM counter. Upper
+selector bits are WARL-masked to zero, so the complete retained value space is
+`0–15`; this platform-defined event mapping is declared in the ACT4
+configuration's `HPM_EVENTS` list.
+
 ## 4. Floating point
 
 | Choice the spec leaves open | Ours | Status |

@@ -560,6 +560,34 @@ mod tests {
     }
 
     #[test]
+    fn act4_declares_every_retained_hpm_event_selector() {
+        const CONFIG: &str = include_str!("../tests/compliance/act4/arvsr-rv64imafdcb.yaml");
+        let values = CONFIG
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("HPM_EVENTS:"))
+            .expect("ACT4 config must declare HPM_EVENTS");
+        let declared: Vec<u64> = values
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(|value| value.trim().parse().expect("numeric HPM event"))
+            .collect();
+        let mut csrs = Csrs::default();
+
+        for selector in 0..(1_u64 << HPM_EVENT_BITS) {
+            assert!(csrs.write(inst::CSR_MHPMEVENT3, selector));
+            let retained = csrs.read(inst::CSR_MHPMEVENT3).unwrap();
+
+            assert_eq!(retained, selector);
+            assert!(
+                declared.contains(&retained),
+                "HPM_EVENTS is missing retained selector {retained}"
+            );
+        }
+    }
+
+    #[test]
     fn fcsr_aliases_require_enabled_state_and_set_fs_dirty() {
         let mut csrs = Csrs::default();
 

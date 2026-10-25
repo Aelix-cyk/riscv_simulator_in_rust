@@ -10,3 +10,4 @@
 | [0006 — execute() retires instructions without advancing mcycle](0006-execute-retires-without-advancing-mcycle.md) | Fixed |
 | [0007 — spurious underflow when a result rounds up to the minimum normal](0007-spurious-underflow-at-min-normal-boundary.md) | Fixed |
 | [0008 — trace output omits static floating-point rounding modes](0008-fp-trace-omits-static-rounding.md) | Fixed |
+| [0009 — HPM event selectors disagree with the ACT4 declaration](0009-hpm-events-mismatch-act4-config.md) | Fixed |
