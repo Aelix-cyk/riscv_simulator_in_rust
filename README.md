@@ -79,6 +79,15 @@ fail the gate. The legacy gate includes `rv64ui`, `rv64um`, `rv64ua`, `rv64uc`,
 `rv64mi`, `rv64uf`, and `rv64ud`; the ACT4 configuration covers F/D arithmetic,
 flags, rounding, conversions, and transfer instructions.
 
+In this development environment, `uv` is not directly on the project `PATH`.
+It is provided through `mise` from the external architecture-test checkout:
+
+```sh
+(cd "$RISCV_ARCH_TEST_DIR" && mise exec -- uv --version)
+```
+
+The current `mise` environment provides `uv 0.11.33`.
+
 ## Development tooling
 
 - CLI agent: `codex`
