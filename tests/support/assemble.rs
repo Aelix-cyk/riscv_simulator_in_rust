@@ -26,6 +26,7 @@ pub struct Program {
     pub instructions: Vec<Disassembled>,
     work_dir: PathBuf,
     elf: PathBuf,
+    spike_isa: Option<&'static str>,
 }
 
 /// One `objdump -d` instruction line.
@@ -89,9 +90,12 @@ impl Program {
         script.push_str("quit\n");
         fs::write(&commands, script).expect("write spike debug commands");
 
-        let output = run(Command::new("timeout")
-            .arg("30")
-            .arg(spike_tool())
+        let mut spike = Command::new("timeout");
+        spike.arg("30").arg(spike_tool());
+        if let Some(isa) = self.spike_isa {
+            spike.arg(format!("--isa={isa}"));
+        }
+        let output = run(spike
             .arg("-d")
             .arg(format!("--debug-cmd={}", commands.display()))
             .arg(&self.elf));
@@ -147,8 +151,26 @@ pub fn assemble_double(name: &str) -> Program {
     assemble_with_march(name, "rv64imafdc_zifencei_zicsr")
 }
 
+/// Assembles a fixture with the B-extension subsets enabled.
+pub fn assemble_bitmanip(name: &str) -> Program {
+    assemble_with_march_and_isa(
+        name,
+        "rv64imac_zba_zbb_zbs_zicsr_zifencei",
+        Some("rv64imafdc_zba_zbb_zbs_zicsr_zifencei"),
+    )
+}
+
 /// Assembles a fixture for a selected ISA string.
 fn assemble_with_march(name: &str, march: &str) -> Program {
+    assemble_with_march_and_isa(name, march, None)
+}
+
+/// Assembles a fixture and optionally selects the Spike ISA explicitly.
+fn assemble_with_march_and_isa(
+    name: &str,
+    march: &str,
+    spike_isa: Option<&'static str>,
+) -> Program {
     let work_dir = std::env::temp_dir().join(format!(
         "arvsr-{}-{}",
         std::process::id(),
@@ -192,6 +214,7 @@ fn assemble_with_march(name: &str, march: &str) -> Program {
         instructions: parse_disassembly(&disassembly),
         work_dir,
         elf,
+        spike_isa,
     }
 }
 

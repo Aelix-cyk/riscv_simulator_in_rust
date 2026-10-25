@@ -22,6 +22,7 @@ const MSTATUS_FIXED: u64 = MSTATUS_UXL;
 const MXL_SHIFT: u32 = 62;
 const MXL_64: u64 = 2;
 const MISA_EXT_A_SHIFT: u32 = 0;
+const MISA_EXT_B_SHIFT: u32 = 1;
 const MISA_EXT_C_SHIFT: u32 = 2;
 const MISA_EXT_D_SHIFT: u32 = 3;
 const MISA_EXT_F_SHIFT: u32 = 5;
@@ -30,6 +31,7 @@ const MISA_EXT_M_SHIFT: u32 = 12;
 const MISA_EXT_U_SHIFT: u32 = 20;
 const MISA_VALUE: u64 = (MXL_64 << MXL_SHIFT)
     | (1 << MISA_EXT_A_SHIFT)
+    | (1 << MISA_EXT_B_SHIFT)
     | (1 << MISA_EXT_C_SHIFT)
     | (1 << MISA_EXT_D_SHIFT)
     | (1 << MISA_EXT_F_SHIFT)
@@ -349,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_is_a_fixed_rv64imafdcu_warl() {
+    fn misa_is_a_fixed_rv64imafdcbu_warl() {
         let mut csrs = Csrs::default();
 
         assert_eq!(csrs.read(inst::CSR_MISA), Some(MISA_VALUE));

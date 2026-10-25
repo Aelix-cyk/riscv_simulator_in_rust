@@ -32,7 +32,7 @@ mandatory here by reference, so these rows gate conformance too.
 | RVA22U64 | Ziccamoa — AMOArithmetic in those regions | Fixed | |
 | RVA22U64 | Zicclsm — misaligned loads and stores supported in those regions | Fixed | May execute extremely slowly |
 | RVA22U64 | Za64rs — reservation sets contiguous, naturally aligned, at most 64 bytes | Fixed | Tied to the 64-byte block size |
-| RVA22U64 | B — bit manipulation | Fixed | |
+| RVA22U64 | B — bit manipulation | Implemented | Zba, Zbb, and Zbs |
 | RVA22U64 | Zihpm — hardware performance counters | Fixed | |
 | RVA22U64 | Zihintpause — PAUSE hint | Fixed | May execute as a NOP |
 | RVA22U64 | Zic64b — cache blocks 64 bytes, naturally aligned | Fixed | Longer blocks need 64-byte sub-blocks; shorter blocks need sequenced operations |
@@ -99,4 +99,3 @@ mandatory here by reference, so these rows gate conformance too.
 | Clause | Recommendation | Status |
 |---|---|---|
 | RVA22S64 | Illegal-instruction exception on unimplemented opcodes | Undecided |
-

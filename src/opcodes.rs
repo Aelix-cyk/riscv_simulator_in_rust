@@ -15,6 +15,9 @@ use crate::inst;
 
 const WORD_BITS: u32 = 32;
 const DOUBLEWORD_BITS: u32 = 64;
+const REGISTER_FIELD_MASK: u32 = 0x1f;
+const RS2_SHIFT: u32 = 20;
+const ZEXT_H_RS2_MASK: u32 = REGISTER_FIELD_MASK << RS2_SHIFT;
 
 /// One row of the instruction table.
 struct Row {
@@ -69,6 +72,53 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_SLLW, inst::MASK_SLLW, sllw),
     row(inst::MATCH_SRLW, inst::MASK_SRLW, srlw),
     row(inst::MATCH_SRAW, inst::MASK_SRAW, sraw),
+    // Zba address-generation operations.
+    row(inst::MATCH_ADD_UW, inst::MASK_ADD_UW, add_uw),
+    row(inst::MATCH_SH1ADD, inst::MASK_SH1ADD, sh1add),
+    row(inst::MATCH_SH1ADD_UW, inst::MASK_SH1ADD_UW, sh1add_uw),
+    row(inst::MATCH_SH2ADD, inst::MASK_SH2ADD, sh2add),
+    row(inst::MATCH_SH2ADD_UW, inst::MASK_SH2ADD_UW, sh2add_uw),
+    row(inst::MATCH_SH3ADD, inst::MASK_SH3ADD, sh3add),
+    row(inst::MATCH_SH3ADD_UW, inst::MASK_SH3ADD_UW, sh3add_uw),
+    row(inst::MATCH_SLLI_UW, inst::MASK_SLLI_UW, slli_uw),
+    // Zbb logical, count, comparison, extension, and rotation operations.
+    row(inst::MATCH_ANDN, inst::MASK_ANDN, andn),
+    row(inst::MATCH_ORN, inst::MASK_ORN, orn),
+    row(inst::MATCH_XNOR, inst::MASK_XNOR, xnor),
+    row(inst::MATCH_CLZ, inst::MASK_CLZ, clz),
+    row(inst::MATCH_CLZW, inst::MASK_CLZW, clzw),
+    row(inst::MATCH_CTZ, inst::MASK_CTZ, ctz),
+    row(inst::MATCH_CTZW, inst::MASK_CTZW, ctzw),
+    row(inst::MATCH_CPOP, inst::MASK_CPOP, cpop),
+    row(inst::MATCH_CPOPW, inst::MASK_CPOPW, cpopw),
+    row(inst::MATCH_MAX, inst::MASK_MAX, max),
+    row(inst::MATCH_MAXU, inst::MASK_MAXU, maxu),
+    row(inst::MATCH_MIN, inst::MASK_MIN, min),
+    row(inst::MATCH_MINU, inst::MASK_MINU, minu),
+    row(inst::MATCH_SEXT_B, inst::MASK_SEXT_B, sext_b),
+    row(inst::MATCH_SEXT_H, inst::MASK_SEXT_H, sext_h),
+    row(
+        inst::MATCH_PACKW,
+        inst::MASK_PACKW | ZEXT_H_RS2_MASK,
+        zext_h,
+    ),
+    row(inst::MATCH_ROL, inst::MASK_ROL, rol),
+    row(inst::MATCH_ROLW, inst::MASK_ROLW, rolw),
+    row(inst::MATCH_ROR, inst::MASK_ROR, ror),
+    row(inst::MATCH_RORI, inst::MASK_RORI, rori),
+    row(inst::MATCH_RORIW, inst::MASK_RORIW, roriw),
+    row(inst::MATCH_RORW, inst::MASK_RORW, rorw),
+    row(inst::MATCH_ORC_B, inst::MASK_ORC_B, orc_b),
+    row(inst::MATCH_REV8, inst::MASK_REV8, rev8),
+    // Zbs single-bit operations.
+    row(inst::MATCH_BSET, inst::MASK_BSET, bset),
+    row(inst::MATCH_BSETI, inst::MASK_BSETI, bseti),
+    row(inst::MATCH_BCLR, inst::MASK_BCLR, bclr),
+    row(inst::MATCH_BCLRI, inst::MASK_BCLRI, bclri),
+    row(inst::MATCH_BINV, inst::MASK_BINV, binv),
+    row(inst::MATCH_BINVI, inst::MASK_BINVI, binvi),
+    row(inst::MATCH_BEXT, inst::MASK_BEXT, bext),
+    row(inst::MATCH_BEXTI, inst::MASK_BEXTI, bexti),
     // F-extension loads, stores, arithmetic, and conversions.
     row(inst::MATCH_FLW, inst::MASK_FLW, flw),
     row(inst::MATCH_FSW, inst::MASK_FSW, fsw),
@@ -524,6 +574,82 @@ fn sraw(word: Word) -> Instruction {
         rs2: word.rs2(),
     }
 }
+
+macro_rules! rr_builder {
+    ($name:ident, $variant:ident) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::$variant {
+                rd: word.rd(),
+                rs1: word.rs1(),
+                rs2: word.rs2(),
+            }
+        }
+    };
+}
+
+macro_rules! unary_builder {
+    ($name:ident, $variant:ident) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::$variant {
+                rd: word.rd(),
+                rs1: word.rs1(),
+            }
+        }
+    };
+}
+
+macro_rules! shamt_builder {
+    ($name:ident, $variant:ident, $shamt:ident) => {
+        fn $name(word: Word) -> Instruction {
+            Instruction::$variant {
+                rd: word.rd(),
+                rs1: word.rs1(),
+                shamt: word.$shamt(),
+            }
+        }
+    };
+}
+
+rr_builder!(add_uw, AddUw);
+rr_builder!(sh1add, Sh1Add);
+rr_builder!(sh1add_uw, Sh1AddUw);
+rr_builder!(sh2add, Sh2Add);
+rr_builder!(sh2add_uw, Sh2AddUw);
+rr_builder!(sh3add, Sh3Add);
+rr_builder!(sh3add_uw, Sh3AddUw);
+shamt_builder!(slli_uw, SlliUw, shamt);
+rr_builder!(andn, Andn);
+rr_builder!(orn, Orn);
+rr_builder!(xnor, Xnor);
+unary_builder!(clz, Clz);
+unary_builder!(clzw, Clzw);
+unary_builder!(ctz, Ctz);
+unary_builder!(ctzw, Ctzw);
+unary_builder!(cpop, Cpop);
+unary_builder!(cpopw, Cpopw);
+rr_builder!(max, Max);
+rr_builder!(maxu, Maxu);
+rr_builder!(min, Min);
+rr_builder!(minu, Minu);
+unary_builder!(sext_b, SextB);
+unary_builder!(sext_h, SextH);
+unary_builder!(zext_h, ZextH);
+rr_builder!(rol, Rol);
+rr_builder!(rolw, Rolw);
+rr_builder!(ror, Ror);
+shamt_builder!(rori, Rori, shamt);
+shamt_builder!(roriw, Roriw, shamt_w);
+rr_builder!(rorw, Rorw);
+unary_builder!(orc_b, OrcB);
+unary_builder!(rev8, Rev8);
+rr_builder!(bset, Bset);
+shamt_builder!(bseti, Bseti, shamt);
+rr_builder!(bclr, Bclr);
+shamt_builder!(bclri, Bclri, shamt);
+rr_builder!(binv, Binv);
+shamt_builder!(binvi, Binvi, shamt);
+rr_builder!(bext, Bext);
+shamt_builder!(bexti, Bexti, shamt);
 
 fn flw(word: Word) -> Instruction {
     Instruction::Flw {

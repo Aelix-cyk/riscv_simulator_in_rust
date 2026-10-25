@@ -305,6 +305,92 @@ pub enum Instruction {
     /// `sraw rd, rs1, rs2`
     Sraw { rd: u8, rs1: u8, rs2: u8 },
 
+    // Zba address-generation operations.
+    /// `add.uw rd, rs1, rs2`
+    AddUw { rd: u8, rs1: u8, rs2: u8 },
+    /// `sh1add rd, rs1, rs2`
+    Sh1Add { rd: u8, rs1: u8, rs2: u8 },
+    /// `sh1add.uw rd, rs1, rs2`
+    Sh1AddUw { rd: u8, rs1: u8, rs2: u8 },
+    /// `sh2add rd, rs1, rs2`
+    Sh2Add { rd: u8, rs1: u8, rs2: u8 },
+    /// `sh2add.uw rd, rs1, rs2`
+    Sh2AddUw { rd: u8, rs1: u8, rs2: u8 },
+    /// `sh3add rd, rs1, rs2`
+    Sh3Add { rd: u8, rs1: u8, rs2: u8 },
+    /// `sh3add.uw rd, rs1, rs2`
+    Sh3AddUw { rd: u8, rs1: u8, rs2: u8 },
+    /// `slli.uw rd, rs1, shamt`
+    SlliUw { rd: u8, rs1: u8, shamt: u8 },
+
+    // Zbb logical, count, comparison, extension, and rotation operations.
+    /// `andn rd, rs1, rs2`
+    Andn { rd: u8, rs1: u8, rs2: u8 },
+    /// `orn rd, rs1, rs2`
+    Orn { rd: u8, rs1: u8, rs2: u8 },
+    /// `xnor rd, rs1, rs2`
+    Xnor { rd: u8, rs1: u8, rs2: u8 },
+    /// `clz rd, rs1`
+    Clz { rd: u8, rs1: u8 },
+    /// `clzw rd, rs1`
+    Clzw { rd: u8, rs1: u8 },
+    /// `ctz rd, rs1`
+    Ctz { rd: u8, rs1: u8 },
+    /// `ctzw rd, rs1`
+    Ctzw { rd: u8, rs1: u8 },
+    /// `cpop rd, rs1`
+    Cpop { rd: u8, rs1: u8 },
+    /// `cpopw rd, rs1`
+    Cpopw { rd: u8, rs1: u8 },
+    /// `max rd, rs1, rs2`
+    Max { rd: u8, rs1: u8, rs2: u8 },
+    /// `maxu rd, rs1, rs2`
+    Maxu { rd: u8, rs1: u8, rs2: u8 },
+    /// `min rd, rs1, rs2`
+    Min { rd: u8, rs1: u8, rs2: u8 },
+    /// `minu rd, rs1, rs2`
+    Minu { rd: u8, rs1: u8, rs2: u8 },
+    /// `sext.b rd, rs1`
+    SextB { rd: u8, rs1: u8 },
+    /// `sext.h rd, rs1`
+    SextH { rd: u8, rs1: u8 },
+    /// `zext.h rd, rs1`
+    ZextH { rd: u8, rs1: u8 },
+    /// `rol rd, rs1, rs2`
+    Rol { rd: u8, rs1: u8, rs2: u8 },
+    /// `rolw rd, rs1, rs2`
+    Rolw { rd: u8, rs1: u8, rs2: u8 },
+    /// `ror rd, rs1, rs2`
+    Ror { rd: u8, rs1: u8, rs2: u8 },
+    /// `rori rd, rs1, shamt`
+    Rori { rd: u8, rs1: u8, shamt: u8 },
+    /// `roriw rd, rs1, shamt`
+    Roriw { rd: u8, rs1: u8, shamt: u8 },
+    /// `rorw rd, rs1, rs2`
+    Rorw { rd: u8, rs1: u8, rs2: u8 },
+    /// `orc.b rd, rs1`
+    OrcB { rd: u8, rs1: u8 },
+    /// `rev8 rd, rs1`
+    Rev8 { rd: u8, rs1: u8 },
+
+    // Zbs single-bit operations.
+    /// `bset rd, rs1, rs2`
+    Bset { rd: u8, rs1: u8, rs2: u8 },
+    /// `bseti rd, rs1, shamt`
+    Bseti { rd: u8, rs1: u8, shamt: u8 },
+    /// `bclr rd, rs1, rs2`
+    Bclr { rd: u8, rs1: u8, rs2: u8 },
+    /// `bclri rd, rs1, shamt`
+    Bclri { rd: u8, rs1: u8, shamt: u8 },
+    /// `binv rd, rs1, rs2`
+    Binv { rd: u8, rs1: u8, rs2: u8 },
+    /// `binvi rd, rs1, shamt`
+    Binvi { rd: u8, rs1: u8, shamt: u8 },
+    /// `bext rd, rs1, rs2`
+    Bext { rd: u8, rs1: u8, rs2: u8 },
+    /// `bexti rd, rs1, shamt`
+    Bexti { rd: u8, rs1: u8, shamt: u8 },
+
     // F-extension memory and arithmetic operations.
     /// `flw rd, offset(rs1)`
     Flw { rd: u8, rs1: u8, offset: i64 },
@@ -1592,6 +1678,46 @@ impl Instruction {
             Instruction::Sllw { .. } => "sllw",
             Instruction::Srlw { .. } => "srlw",
             Instruction::Sraw { .. } => "sraw",
+            Instruction::AddUw { .. } => "add.uw",
+            Instruction::Sh1Add { .. } => "sh1add",
+            Instruction::Sh1AddUw { .. } => "sh1add.uw",
+            Instruction::Sh2Add { .. } => "sh2add",
+            Instruction::Sh2AddUw { .. } => "sh2add.uw",
+            Instruction::Sh3Add { .. } => "sh3add",
+            Instruction::Sh3AddUw { .. } => "sh3add.uw",
+            Instruction::SlliUw { .. } => "slli.uw",
+            Instruction::Andn { .. } => "andn",
+            Instruction::Orn { .. } => "orn",
+            Instruction::Xnor { .. } => "xnor",
+            Instruction::Clz { .. } => "clz",
+            Instruction::Clzw { .. } => "clzw",
+            Instruction::Ctz { .. } => "ctz",
+            Instruction::Ctzw { .. } => "ctzw",
+            Instruction::Cpop { .. } => "cpop",
+            Instruction::Cpopw { .. } => "cpopw",
+            Instruction::Max { .. } => "max",
+            Instruction::Maxu { .. } => "maxu",
+            Instruction::Min { .. } => "min",
+            Instruction::Minu { .. } => "minu",
+            Instruction::SextB { .. } => "sext.b",
+            Instruction::SextH { .. } => "sext.h",
+            Instruction::ZextH { .. } => "zext.h",
+            Instruction::Rol { .. } => "rol",
+            Instruction::Rolw { .. } => "rolw",
+            Instruction::Ror { .. } => "ror",
+            Instruction::Rori { .. } => "rori",
+            Instruction::Roriw { .. } => "roriw",
+            Instruction::Rorw { .. } => "rorw",
+            Instruction::OrcB { .. } => "orc.b",
+            Instruction::Rev8 { .. } => "rev8",
+            Instruction::Bset { .. } => "bset",
+            Instruction::Bseti { .. } => "bseti",
+            Instruction::Bclr { .. } => "bclr",
+            Instruction::Bclri { .. } => "bclri",
+            Instruction::Binv { .. } => "binv",
+            Instruction::Binvi { .. } => "binvi",
+            Instruction::Bext { .. } => "bext",
+            Instruction::Bexti { .. } => "bexti",
             Instruction::Flw { .. } => "flw",
             Instruction::Fsw { .. } => "fsw",
             Instruction::Fld { .. } => "fld",
@@ -1769,6 +1895,46 @@ impl Instruction {
             Instruction::Sllw { rd, rs1, rs2 } => reg_op("sllw", rd, rs1, rs2),
             Instruction::Srlw { rd, rs1, rs2 } => reg_op("srlw", rd, rs1, rs2),
             Instruction::Sraw { rd, rs1, rs2 } => reg_op("sraw", rd, rs1, rs2),
+            Instruction::AddUw { rd, rs1, rs2 } => reg_op("add.uw", rd, rs1, rs2),
+            Instruction::Sh1Add { rd, rs1, rs2 } => reg_op("sh1add", rd, rs1, rs2),
+            Instruction::Sh1AddUw { rd, rs1, rs2 } => reg_op("sh1add.uw", rd, rs1, rs2),
+            Instruction::Sh2Add { rd, rs1, rs2 } => reg_op("sh2add", rd, rs1, rs2),
+            Instruction::Sh2AddUw { rd, rs1, rs2 } => reg_op("sh2add.uw", rd, rs1, rs2),
+            Instruction::Sh3Add { rd, rs1, rs2 } => reg_op("sh3add", rd, rs1, rs2),
+            Instruction::Sh3AddUw { rd, rs1, rs2 } => reg_op("sh3add.uw", rd, rs1, rs2),
+            Instruction::SlliUw { rd, rs1, shamt } => shamt_op("slli.uw", rd, rs1, shamt),
+            Instruction::Andn { rd, rs1, rs2 } => reg_op("andn", rd, rs1, rs2),
+            Instruction::Orn { rd, rs1, rs2 } => reg_op("orn", rd, rs1, rs2),
+            Instruction::Xnor { rd, rs1, rs2 } => reg_op("xnor", rd, rs1, rs2),
+            Instruction::Clz { rd, rs1 } => unary_op("clz", rd, rs1),
+            Instruction::Clzw { rd, rs1 } => unary_op("clzw", rd, rs1),
+            Instruction::Ctz { rd, rs1 } => unary_op("ctz", rd, rs1),
+            Instruction::Ctzw { rd, rs1 } => unary_op("ctzw", rd, rs1),
+            Instruction::Cpop { rd, rs1 } => unary_op("cpop", rd, rs1),
+            Instruction::Cpopw { rd, rs1 } => unary_op("cpopw", rd, rs1),
+            Instruction::Max { rd, rs1, rs2 } => reg_op("max", rd, rs1, rs2),
+            Instruction::Maxu { rd, rs1, rs2 } => reg_op("maxu", rd, rs1, rs2),
+            Instruction::Min { rd, rs1, rs2 } => reg_op("min", rd, rs1, rs2),
+            Instruction::Minu { rd, rs1, rs2 } => reg_op("minu", rd, rs1, rs2),
+            Instruction::SextB { rd, rs1 } => unary_op("sext.b", rd, rs1),
+            Instruction::SextH { rd, rs1 } => unary_op("sext.h", rd, rs1),
+            Instruction::ZextH { rd, rs1 } => unary_op("zext.h", rd, rs1),
+            Instruction::Rol { rd, rs1, rs2 } => reg_op("rol", rd, rs1, rs2),
+            Instruction::Rolw { rd, rs1, rs2 } => reg_op("rolw", rd, rs1, rs2),
+            Instruction::Ror { rd, rs1, rs2 } => reg_op("ror", rd, rs1, rs2),
+            Instruction::Rori { rd, rs1, shamt } => shamt_op("rori", rd, rs1, shamt),
+            Instruction::Roriw { rd, rs1, shamt } => shamt_op("roriw", rd, rs1, shamt),
+            Instruction::Rorw { rd, rs1, rs2 } => reg_op("rorw", rd, rs1, rs2),
+            Instruction::OrcB { rd, rs1 } => unary_op("orc.b", rd, rs1),
+            Instruction::Rev8 { rd, rs1 } => unary_op("rev8", rd, rs1),
+            Instruction::Bset { rd, rs1, rs2 } => reg_op("bset", rd, rs1, rs2),
+            Instruction::Bseti { rd, rs1, shamt } => shamt_op("bseti", rd, rs1, shamt),
+            Instruction::Bclr { rd, rs1, rs2 } => reg_op("bclr", rd, rs1, rs2),
+            Instruction::Bclri { rd, rs1, shamt } => shamt_op("bclri", rd, rs1, shamt),
+            Instruction::Binv { rd, rs1, rs2 } => reg_op("binv", rd, rs1, rs2),
+            Instruction::Binvi { rd, rs1, shamt } => shamt_op("binvi", rd, rs1, shamt),
+            Instruction::Bext { rd, rs1, rs2 } => reg_op("bext", rd, rs1, rs2),
+            Instruction::Bexti { rd, rs1, shamt } => shamt_op("bexti", rd, rs1, shamt),
             Instruction::Flw { rd, rs1, offset } => fp_load_op("flw", rd, rs1, offset),
             Instruction::Fsw { rs2, rs1, offset } => fp_store_op("fsw", rs2, rs1, offset),
             Instruction::Fld { rd, rs1, offset } => fp_load_op("fld", rd, rs1, offset),
@@ -2134,6 +2300,11 @@ impl Instruction {
 /// `mnemonic rd,rs1,imm`
 fn imm_op(mnemonic: &str, rd: u8, rs1: u8, imm: i64) -> String {
     format!("{mnemonic} {},{},{imm}", abi_name(rd), abi_name(rs1))
+}
+
+/// `mnemonic rd,rs1`
+fn unary_op(mnemonic: &str, rd: u8, rs1: u8) -> String {
+    format!("{mnemonic} {},{}", abi_name(rd), abi_name(rs1))
 }
 
 fn fp_binary_mnemonic(op: FpBinaryOp, format: FpFormat) -> &'static str {

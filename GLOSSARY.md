@@ -55,6 +55,7 @@ category and listed alphabetically within each section.
 ## Standard Extensions
 
 - **A extension** — Atomic memory operations for synchronization between harts.
+- **B extension** — Bit manipulation, formed for this profile by Zba (address generation), Zbb (basic operations), and Zbs (single-bit operations).
 - **AMO** — Atomic memory operation: an A-extension instruction that reads, modifies, and writes memory indivisibly.
 - **C extension** — Compressed instructions: 16-bit encodings of common operations.
 - **D extension** — Double-precision (64-bit) IEEE-754 floating point.

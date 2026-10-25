@@ -21,6 +21,11 @@ const WORD_BITS: u32 = 32;
 const DYNAMIC_ROUNDING: u8 = 7;
 const FLOAT_BITS_MASK: u64 = (1 << WORD_BITS) - 1;
 const NAN_BOX: u64 = FLOAT_BITS_MASK << WORD_BITS;
+const BYTE_BITS: u32 = 8;
+const BYTE_MASK: u64 = u8::MAX as u64;
+const SHIFT_ONE: u32 = 1;
+const SHIFT_TWO: u32 = 2;
+const SHIFT_THREE: u32 = 3;
 
 /// A synchronous exception ready for architectural trap delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,6 +379,159 @@ impl<B: Bus> Machine<B> {
             Instruction::Sraw { rd, rs1, rs2 } => {
                 let value = ((self.gpr(rs1) as u32) as i32) >> shift_32(self.gpr(rs2));
                 self.write(rd, sign_extend_32(u64::from(value as u32)));
+            }
+            Instruction::AddUw { rd, rs1, rs2 } => {
+                let value = u64::from(self.gpr(rs1) as u32).wrapping_add(self.gpr(rs2));
+                self.write(rd, value);
+            }
+            Instruction::Sh1Add { rd, rs1, rs2 } => {
+                let value = self
+                    .gpr(rs2)
+                    .wrapping_add(self.gpr(rs1).wrapping_shl(SHIFT_ONE));
+                self.write(rd, value);
+            }
+            Instruction::Sh1AddUw { rd, rs1, rs2 } => {
+                let shifted = u64::from(self.gpr(rs1) as u32).wrapping_shl(SHIFT_ONE);
+                self.write(rd, self.gpr(rs2).wrapping_add(shifted));
+            }
+            Instruction::Sh2Add { rd, rs1, rs2 } => {
+                let value = self
+                    .gpr(rs2)
+                    .wrapping_add(self.gpr(rs1).wrapping_shl(SHIFT_TWO));
+                self.write(rd, value);
+            }
+            Instruction::Sh2AddUw { rd, rs1, rs2 } => {
+                let shifted = u64::from(self.gpr(rs1) as u32).wrapping_shl(SHIFT_TWO);
+                self.write(rd, self.gpr(rs2).wrapping_add(shifted));
+            }
+            Instruction::Sh3Add { rd, rs1, rs2 } => {
+                let value = self
+                    .gpr(rs2)
+                    .wrapping_add(self.gpr(rs1).wrapping_shl(SHIFT_THREE));
+                self.write(rd, value);
+            }
+            Instruction::Sh3AddUw { rd, rs1, rs2 } => {
+                let shifted = u64::from(self.gpr(rs1) as u32).wrapping_shl(SHIFT_THREE);
+                self.write(rd, self.gpr(rs2).wrapping_add(shifted));
+            }
+            Instruction::SlliUw { rd, rs1, shamt } => {
+                let value = u64::from(self.gpr(rs1) as u32).wrapping_shl(shamt.into());
+                self.write(rd, value);
+            }
+            Instruction::Andn { rd, rs1, rs2 } => {
+                self.write(rd, self.gpr(rs1) & !self.gpr(rs2));
+            }
+            Instruction::Orn { rd, rs1, rs2 } => {
+                self.write(rd, self.gpr(rs1) | !self.gpr(rs2));
+            }
+            Instruction::Xnor { rd, rs1, rs2 } => {
+                self.write(rd, !(self.gpr(rs1) ^ self.gpr(rs2)));
+            }
+            Instruction::Clz { rd, rs1 } => {
+                self.write(rd, u64::from(self.gpr(rs1).leading_zeros()));
+            }
+            Instruction::Clzw { rd, rs1 } => {
+                self.write(rd, u64::from((self.gpr(rs1) as u32).leading_zeros()));
+            }
+            Instruction::Ctz { rd, rs1 } => {
+                self.write(rd, u64::from(self.gpr(rs1).trailing_zeros()));
+            }
+            Instruction::Ctzw { rd, rs1 } => {
+                self.write(rd, u64::from((self.gpr(rs1) as u32).trailing_zeros()));
+            }
+            Instruction::Cpop { rd, rs1 } => {
+                self.write(rd, u64::from(self.gpr(rs1).count_ones()));
+            }
+            Instruction::Cpopw { rd, rs1 } => {
+                self.write(rd, u64::from((self.gpr(rs1) as u32).count_ones()));
+            }
+            Instruction::Max { rd, rs1, rs2 } => {
+                self.write(rd, (self.gpr(rs1) as i64).max(self.gpr(rs2) as i64) as u64);
+            }
+            Instruction::Maxu { rd, rs1, rs2 } => {
+                self.write(rd, self.gpr(rs1).max(self.gpr(rs2)));
+            }
+            Instruction::Min { rd, rs1, rs2 } => {
+                self.write(rd, (self.gpr(rs1) as i64).min(self.gpr(rs2) as i64) as u64);
+            }
+            Instruction::Minu { rd, rs1, rs2 } => {
+                self.write(rd, self.gpr(rs1).min(self.gpr(rs2)));
+            }
+            Instruction::SextB { rd, rs1 } => {
+                self.write(rd, self.gpr(rs1) as u8 as i8 as i64 as u64);
+            }
+            Instruction::SextH { rd, rs1 } => {
+                self.write(rd, self.gpr(rs1) as u16 as i16 as i64 as u64);
+            }
+            Instruction::ZextH { rd, rs1 } => {
+                self.write(rd, u64::from(self.gpr(rs1) as u16));
+            }
+            Instruction::Rol { rd, rs1, rs2 } => {
+                self.write(rd, self.gpr(rs1).rotate_left(shift_64(self.gpr(rs2))));
+            }
+            Instruction::Rolw { rd, rs1, rs2 } => {
+                let value = (self.gpr(rs1) as u32).rotate_left(shift_32(self.gpr(rs2)));
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Ror { rd, rs1, rs2 } => {
+                self.write(rd, self.gpr(rs1).rotate_right(shift_64(self.gpr(rs2))));
+            }
+            Instruction::Rori { rd, rs1, shamt } => {
+                self.write(rd, self.gpr(rs1).rotate_right(shamt.into()));
+            }
+            Instruction::Roriw { rd, rs1, shamt } => {
+                let value = (self.gpr(rs1) as u32).rotate_right(shamt.into());
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::Rorw { rd, rs1, rs2 } => {
+                let value = (self.gpr(rs1) as u32).rotate_right(shift_32(self.gpr(rs2)));
+                self.write(rd, sign_extend_32(u64::from(value)));
+            }
+            Instruction::OrcB { rd, rs1 } => {
+                let value = self.gpr(rs1);
+                let mut result = 0;
+                for shift in (0..u64::BITS).step_by(BYTE_BITS as usize) {
+                    if (value >> shift) & BYTE_MASK != 0 {
+                        result |= BYTE_MASK << shift;
+                    }
+                }
+                self.write(rd, result);
+            }
+            Instruction::Rev8 { rd, rs1 } => {
+                self.write(rd, self.gpr(rs1).swap_bytes());
+            }
+            Instruction::Bset { rd, rs1, rs2 } => {
+                self.write(
+                    rd,
+                    self.gpr(rs1) | 1u64.wrapping_shl(shift_64(self.gpr(rs2))),
+                );
+            }
+            Instruction::Bseti { rd, rs1, shamt } => {
+                self.write(rd, self.gpr(rs1) | 1u64.wrapping_shl(shamt.into()));
+            }
+            Instruction::Bclr { rd, rs1, rs2 } => {
+                self.write(
+                    rd,
+                    self.gpr(rs1) & !1u64.wrapping_shl(shift_64(self.gpr(rs2))),
+                );
+            }
+            Instruction::Bclri { rd, rs1, shamt } => {
+                self.write(rd, self.gpr(rs1) & !1u64.wrapping_shl(shamt.into()));
+            }
+            Instruction::Binv { rd, rs1, rs2 } => {
+                self.write(
+                    rd,
+                    self.gpr(rs1) ^ 1u64.wrapping_shl(shift_64(self.gpr(rs2))),
+                );
+            }
+            Instruction::Binvi { rd, rs1, shamt } => {
+                self.write(rd, self.gpr(rs1) ^ 1u64.wrapping_shl(shamt.into()));
+            }
+            Instruction::Bext { rd, rs1, rs2 } => {
+                self.write(rd, (self.gpr(rs1) >> shift_64(self.gpr(rs2))) & 1);
+            }
+            Instruction::Bexti { rd, rs1, shamt } => {
+                self.write(rd, (self.gpr(rs1) >> shamt) & 1);
             }
             Instruction::Flw { rd, rs1, offset } => {
                 self.require_fp_enabled(word)?;
@@ -2773,7 +2931,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64imafdcu_and_ignores_warl_writes() {
+    fn misa_reports_rv64imafdcbu_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -3157,5 +3315,95 @@ mod tests {
             Some(CYCLE_RELOAD_VALUE + 1)
         );
         assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(1));
+    }
+
+    #[test]
+    fn bitmanip_counts_handle_zero_and_word_widths() {
+        let mut machine = machine();
+
+        for (instruction, rd, expected) in [
+            (Instruction::Clz { rd: 5, rs1: 0 }, 5u8, 64),
+            (Instruction::Ctz { rd: 6, rs1: 0 }, 6u8, 64),
+            (Instruction::Clzw { rd: 7, rs1: 0 }, 7u8, 32),
+            (Instruction::Ctzw { rd: 8, rs1: 0 }, 8u8, 32),
+            (Instruction::Cpop { rd: 9, rs1: 0 }, 9u8, 0),
+        ] {
+            machine.execute(instruction);
+            assert_eq!(machine.cpu().read_gpr(usize::from(rd)), expected, "{rd}");
+        }
+
+        machine.cpu_mut().write_gpr(10, 0xffff_ffff_0000_0001);
+        machine.execute(Instruction::Clzw { rd: 5, rs1: 10 });
+        machine.execute(Instruction::Cpopw { rd: 6, rs1: 10 });
+        assert_eq!(machine.cpu().read_gpr(5), 31);
+        assert_eq!(machine.cpu().read_gpr(6), 1);
+    }
+
+    #[test]
+    fn bitmanip_word_operations_ignore_upper_source_bits() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 0xffff_ffff_8000_0001);
+        machine.cpu_mut().write_gpr(6, 1);
+
+        for instruction in [
+            Instruction::AddUw {
+                rd: 7,
+                rs1: 5,
+                rs2: 6,
+            },
+            Instruction::Sh1AddUw {
+                rd: 8,
+                rs1: 5,
+                rs2: 6,
+            },
+            Instruction::SlliUw {
+                rd: 9,
+                rs1: 5,
+                shamt: 1,
+            },
+            Instruction::Rolw {
+                rd: 10,
+                rs1: 5,
+                rs2: 6,
+            },
+        ] {
+            machine.execute(instruction);
+        }
+
+        assert_eq!(machine.cpu().read_gpr(7), 0x8000_0002);
+        assert_eq!(machine.cpu().read_gpr(8), 0x1_0000_0003);
+        assert_eq!(machine.cpu().read_gpr(9), 0x1_0000_0002);
+        assert_eq!(machine.cpu().read_gpr(10), 3);
+    }
+
+    #[test]
+    fn bitmanip_byte_and_single_bit_operations_cover_edges() {
+        let mut machine = machine();
+        machine.cpu_mut().write_gpr(5, 0x0100_ff00_0000_8000);
+        machine.cpu_mut().write_gpr(6, 0);
+
+        machine.execute(Instruction::OrcB { rd: 7, rs1: 5 });
+        machine.execute(Instruction::Rev8 { rd: 8, rs1: 5 });
+        machine.execute(Instruction::Bclr {
+            rd: 9,
+            rs1: 5,
+            rs2: 6,
+        });
+        machine.execute(Instruction::Bseti {
+            rd: 10,
+            rs1: 6,
+            shamt: 63,
+        });
+        machine.execute(Instruction::Bexti {
+            rd: 11,
+            rs1: 5,
+            shamt: 63,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(7), 0xff00_ff00_0000_ff00);
+        assert_eq!(machine.cpu().read_gpr(8), 0x0080_0000_00ff_0001);
+        assert_eq!(machine.cpu().read_gpr(9), 0x0100_ff00_0000_8000);
+        assert_eq!(machine.cpu().read_gpr(10), 1 << 63);
+        assert_eq!(machine.cpu().read_gpr(11), 0);
     }
 }

@@ -17,6 +17,9 @@ const FIXTURES: [&str; 13] = [
 /// Zca fixtures assembled with compressed instructions enabled.
 const COMPRESSED_FIXTURES: [&str; 2] = ["compressed.S", "compressed_boundaries.S"];
 
+/// RV64B fixtures.
+const BITMANIP_FIXTURES: [&str; 2] = ["b.S", "b_bits.S"];
+
 /// Legal mnemonics that this milestone does not decode yet.
 const UNIMPLEMENTED: [&str; 0] = [];
 
@@ -31,6 +34,9 @@ fn renderer_matches_objdump_text() {
     check_fixture("f.S", assemble::assemble_float);
     check_fixture("d.S", assemble::assemble_double);
     check_fixture("compressed_d.S", assemble::assemble_double);
+    for fixture in BITMANIP_FIXTURES {
+        check_fixture(fixture, assemble::assemble_bitmanip);
+    }
 }
 
 /// Renders every instruction of a fixture and compares it with `objdump` text.
