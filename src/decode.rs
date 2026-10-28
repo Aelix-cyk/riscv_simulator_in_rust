@@ -735,13 +735,19 @@ pub enum Instruction {
     /// `csrrci rd, csr, zimm`
     Csrrci { rd: u8, csr: u16, zimm: u8 },
 
-    // Machine-mode system instructions.
+    // Privileged system instructions.
     /// `ecall`
     Ecall,
     /// `ebreak`
     Ebreak,
     /// `mret`
     Mret,
+    /// `sret`
+    Sret,
+    /// `wfi`
+    Wfi,
+    /// `sfence.vma rs1,rs2`
+    SfenceVma { rs1: u8, rs2: u8 },
 
     // Control transfers.
     /// `lui rd, imm` — `imm` is the value after the 12-bit shift.
@@ -1909,6 +1915,9 @@ impl Instruction {
             Instruction::Ecall => "ecall",
             Instruction::Ebreak => "ebreak",
             Instruction::Mret => "mret",
+            Instruction::Sret => "sret",
+            Instruction::Wfi => "wfi",
+            Instruction::SfenceVma { .. } => "sfence.vma",
             Instruction::Lui { .. } => "lui",
             Instruction::Auipc { .. } => "auipc",
             Instruction::Jalr { .. } => "jalr",
@@ -2352,6 +2361,11 @@ impl Instruction {
             Instruction::Ecall => "ecall".to_owned(),
             Instruction::Ebreak => "ebreak".to_owned(),
             Instruction::Mret => "mret".to_owned(),
+            Instruction::Sret => "sret".to_owned(),
+            Instruction::Wfi => "wfi".to_owned(),
+            Instruction::SfenceVma { rs1, rs2 } => {
+                format!("sfence.vma {},{}", abi_name(rs1), abi_name(rs2))
+            }
             Instruction::Lui { rd, imm } => format!("lui {},{:#x}", abi_name(rd), u_field(imm)),
             Instruction::Auipc { rd, imm } => {
                 format!("auipc {},{:#x}", abi_name(rd), u_field(imm))
@@ -2633,6 +2647,21 @@ fn csr_name(csr: u16) -> String {
         inst::CSR_MEPC => "mepc".to_owned(),
         inst::CSR_MCAUSE => "mcause".to_owned(),
         inst::CSR_MTVAL => "mtval".to_owned(),
+        inst::CSR_MEDELEG => "medeleg".to_owned(),
+        inst::CSR_MIDELEG => "mideleg".to_owned(),
+        inst::CSR_MCOUNTEREN => "mcounteren".to_owned(),
+        inst::CSR_MCOUNTINHIBIT => "mcountinhibit".to_owned(),
+        inst::CSR_SSTATUS => "sstatus".to_owned(),
+        inst::CSR_SIE => "sie".to_owned(),
+        inst::CSR_STVEC => "stvec".to_owned(),
+        inst::CSR_SCOUNTEREN => "scounteren".to_owned(),
+        inst::CSR_SENVCFG => "senvcfg".to_owned(),
+        inst::CSR_SSCRATCH => "sscratch".to_owned(),
+        inst::CSR_SEPC => "sepc".to_owned(),
+        inst::CSR_SCAUSE => "scause".to_owned(),
+        inst::CSR_STVAL => "stval".to_owned(),
+        inst::CSR_SIP => "sip".to_owned(),
+        inst::CSR_SATP => "satp".to_owned(),
         inst::CSR_FFLAGS => "fflags".to_owned(),
         inst::CSR_FRM => "frm".to_owned(),
         inst::CSR_FCSR => "fcsr".to_owned(),
@@ -2932,6 +2961,14 @@ mod tests {
     #[test]
     fn c_ebreak_decodes_as_ebreak() {
         assert_eq!(decode(C_EBREAK), Ok(Instruction::Ebreak));
+    }
+
+    #[test]
+    fn privileged_control_instructions_round_trip() {
+        assert_eq!(decode(inst::MATCH_SRET), Ok(Instruction::Sret));
+        assert_eq!(decode(inst::MATCH_WFI), Ok(Instruction::Wfi));
+        assert_eq!(render(inst::MATCH_SRET).unwrap(), "sret");
+        assert_eq!(render(inst::MATCH_WFI).unwrap(), "wfi");
     }
 
     #[test]

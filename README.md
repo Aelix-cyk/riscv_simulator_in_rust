@@ -4,7 +4,7 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 
 ## Status
 
-A 64-bit hart that executes RV64IMAFDCB with M/U privilege plus Zicsr and Zicntr —
+A 64-bit hart that executes RV64IMAFDCB with M/S/U privilege plus Zicsr and Zicntr —
 the integer ALU operations, all integer multiply/divide and atomic instructions,
 the Zba/Zbb/Zbs bit-manipulation instructions,
 64-byte cache-block management, zero, and prefetch operations, `pause`,
@@ -13,13 +13,14 @@ branches, jumps, loads and stores,
 `fence`/`fence.i`, the six CSR read/modify/write forms, and deterministic cycle,
 time, instruction, and three event-selectable hardware performance counters.
 Synchronous exceptions, including `ecall` and `ebreak`, enter a machine-mode
-handler through `mtvec`. Implemented CSRs include WARL `misa`
-(RV64IMAFDCBU), `fcsr`/`fflags`/`frm`, machine identity/status/trap/delegation
-registers, and counter controls. HPM counters select retired instructions,
-loads, stores, and branches/jumps through one-hot event masks. The target
-profile is RVA22S64, built up progressively: see `GLOSSARY.md` for terminology,
-`docs/impl-choices/` for the requirements and the choices the specification
-leaves open.
+handler through `mtvec`, or a delegated supervisor handler through `stvec`.
+Implemented CSRs include WARL `misa` (RV64IMAFDCBSU), `fcsr`/`fflags`/`frm`,
+machine and supervisor identity/status/trap/delegation registers, and counter
+controls. `satp` supports Bare mode only; Sv39 translation is the next milestone.
+HPM counters select retired instructions, loads, stores, and branches/jumps
+through one-hot event masks. The target profile is RVA22S64, built up
+progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
+requirements and the choices the specification leaves open.
 
 ## Usage
 
@@ -80,9 +81,9 @@ project-local ACT4 ELFs under `target/compliance/act4` by default. Known
 unsupported features and deferred bugs live in
 `tests/compliance/expected_failures.tsv`; listed passes or unlisted failures
 fail the gate. The legacy gate includes `rv64ui`, `rv64um`, `rv64ua`, `rv64uc`,
-the three B families (`rv64uzba`, `rv64uzbb`, `rv64uzbs`), `rv64mi`, `rv64uf`,
-`rv64ud`, and `rv64uzfh`; the ACT4 configuration covers B bit manipulation plus
-F/D/H arithmetic, flags, rounding, conversions, and transfer instructions.
+the three B families (`rv64uzba`, `rv64uzbb`, `rv64uzbs`), `rv64mi`, `rv64si`,
+`rv64uf`, `rv64ud`, and `rv64uzfh`; the ACT4 configuration covers B bit
+manipulation, F/D/H floating point, and M/S/U trap and CSR behavior.
 
 In this development environment, `uv` is not directly on the project `PATH`.
 It is provided through `mise` from the external architecture-test checkout:

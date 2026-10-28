@@ -429,10 +429,13 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_CSRRWI, inst::MASK_CSRRWI, csrrwi),
     row(inst::MATCH_CSRRSI, inst::MASK_CSRRSI, csrrsi),
     row(inst::MATCH_CSRRCI, inst::MASK_CSRRCI, csrrci),
-    // Machine-mode system instructions.
+    // Privileged system instructions.
     row(inst::MATCH_ECALL, inst::MASK_ECALL, ecall),
     row(inst::MATCH_EBREAK, inst::MASK_EBREAK, ebreak),
     row(inst::MATCH_MRET, inst::MASK_MRET, mret),
+    row(inst::MATCH_SRET, inst::MASK_SRET, sret),
+    row(inst::MATCH_WFI, inst::MASK_WFI, wfi),
+    row(inst::MATCH_SFENCE_VMA, inst::MASK_SFENCE_VMA, sfence_vma),
 ];
 
 /// Builds a table row.
@@ -1560,6 +1563,21 @@ fn mret(_word: Word) -> Instruction {
     Instruction::Mret
 }
 
+fn sret(_word: Word) -> Instruction {
+    Instruction::Sret
+}
+
+fn wfi(_word: Word) -> Instruction {
+    Instruction::Wfi
+}
+
+fn sfence_vma(word: Word) -> Instruction {
+    Instruction::SfenceVma {
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1599,9 +1617,7 @@ mod tests {
 
     #[test]
     fn unimplemented_instructions_do_not_decode() {
-        // Legal encodings that later milestones will implement.
-        for code in [inst::MATCH_AMOCAS_D, inst::MATCH_SRET] {
-            assert_eq!(decode(code), Err(Trap::IllegalInstruction), "{code:#010x}");
-        }
+        let code = inst::MATCH_AMOCAS_D;
+        assert_eq!(decode(code), Err(Trap::IllegalInstruction), "{code:#010x}");
     }
 }

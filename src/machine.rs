@@ -77,6 +77,14 @@ enum CacheBlockAccess {
     Zero,
 }
 
+/// Purpose of a virtual-address translation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemoryAccess {
+    Fetch,
+    Load,
+    Store,
+}
+
 /// Why [`Machine::run`] returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunOutcome {
@@ -177,8 +185,8 @@ impl<B: Bus> Machine<B> {
 
     /// Fetches, decodes, and executes one instruction.
     ///
-    /// Synchronous faults enter the machine-mode trap handler instead of
-    /// escaping this method.
+    /// Synchronous faults enter the machine or delegated supervisor trap
+    /// handler instead of escaping this method.
     pub fn step(&mut self, options: StepOptions) {
         let pc = self.cpu.pc();
         let instruction = match self.fetch_decoded() {
@@ -208,7 +216,8 @@ impl<B: Bus> Machine<B> {
 
     /// Executes one already-fetched instruction.
     ///
-    /// Synchronous faults enter the machine-mode trap handler.
+    /// Synchronous faults enter the machine or delegated supervisor trap
+    /// handler.
     pub fn execute(&mut self, instruction: Instruction) {
         let decoded = DecodedInstruction::standard(instruction, instruction_word(instruction));
         self.execute_with_decoded(decoded);
@@ -223,10 +232,12 @@ impl<B: Bus> Machine<B> {
                 raw: EMPTY_INSTRUCTION_BITS,
             });
         }
-        let low = self.bus.read_u16(pc).map_err(|trap| FetchFailure {
-            trap,
-            raw: EMPTY_INSTRUCTION_BITS,
-        })?;
+        let low = self
+            .bus_read_u16(pc, MemoryAccess::Fetch)
+            .map_err(|trap| FetchFailure {
+                trap,
+                raw: EMPTY_INSTRUCTION_BITS,
+            })?;
         if is_compressed(u32::from(low)) {
             return decode_word(u32::from(low)).map_err(|trap| FetchFailure {
                 trap,
@@ -234,8 +245,7 @@ impl<B: Bus> Machine<B> {
             });
         }
         let high = self
-            .bus
-            .read_u16(pc.wrapping_add(MIN_INSTRUCTION_BYTES))
+            .bus_read_u16(pc.wrapping_add(MIN_INSTRUCTION_BYTES), MemoryAccess::Fetch)
             .map_err(|trap| FetchFailure {
                 trap,
                 raw: EMPTY_INSTRUCTION_BITS,
@@ -278,16 +288,31 @@ impl<B: Bus> Machine<B> {
         }
     }
 
-    /// Records trap state and transfers control to `mtvec`.
+    /// Delivers a synchronous trap to machine or delegated supervisor mode.
     fn enter_trap(&mut self, exception: Exception) {
         let epc = self.cpu.pc();
         let previous = self.cpu.privilege();
-        self.cpu
-            .csrs_mut()
-            .enter_trap(epc, u64::from(exception.cause), exception.tval, previous);
-        self.cpu.set_privilege(PrivilegeMode::Machine);
-        let handler = self.cpu.csrs().trap_vector();
-        self.cpu.set_pc(handler);
+        let delegated = previous != PrivilegeMode::Machine
+            && self.cpu.csrs().delegates_exception(exception.cause);
+        if delegated {
+            self.cpu.csrs_mut().enter_s_trap(
+                epc,
+                u64::from(exception.cause),
+                exception.tval,
+                previous,
+            );
+            self.cpu.set_privilege(PrivilegeMode::Supervisor);
+            self.cpu.set_pc(self.cpu.csrs().supervisor_trap_vector());
+        } else {
+            self.cpu.csrs_mut().enter_trap(
+                epc,
+                u64::from(exception.cause),
+                exception.tval,
+                previous,
+            );
+            self.cpu.set_privilege(PrivilegeMode::Machine);
+            self.cpu.set_pc(self.cpu.csrs().trap_vector());
+        }
     }
 
     /// Executes one instruction without delivering exceptions.
@@ -553,8 +578,7 @@ impl<B: Bus> Machine<B> {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
-                    .bus
-                    .read_u16(address)
+                    .bus_read_u16(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
                 self.write_f16(rd, value);
             }
@@ -562,8 +586,7 @@ impl<B: Bus> Machine<B> {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self.read_fpr(rs2) as u16;
-                self.bus
-                    .write_u16(address, value)
+                self.bus_write_u16(address, value, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 2);
             }
@@ -571,8 +594,7 @@ impl<B: Bus> Machine<B> {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
-                    .bus
-                    .read_u32(address)
+                    .bus_read_u32(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
                 self.write_f32(rd, value);
             }
@@ -580,8 +602,7 @@ impl<B: Bus> Machine<B> {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
-                    .bus
-                    .read_u64(address)
+                    .bus_read_u64(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
                 self.write_f64(rd, value);
             }
@@ -589,8 +610,7 @@ impl<B: Bus> Machine<B> {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self.read_fpr(rs2) as u32;
-                self.bus
-                    .write_u32(address, value)
+                self.bus_write_u32(address, value, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 4);
             }
@@ -598,8 +618,7 @@ impl<B: Bus> Machine<B> {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self.read_fpr(rs2);
-                self.bus
-                    .write_u64(address, value)
+                self.bus_write_u64(address, value, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 8);
             }
@@ -796,8 +815,7 @@ impl<B: Bus> Machine<B> {
                 let address = self.gpr(rs1);
                 Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_LOAD)?;
                 let value = self
-                    .bus
-                    .read_u32(address)
+                    .bus_read_u32(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
                 self.reservation = Some(Self::reservation_set(address));
                 self.write(rd, sign_extend_32(u64::from(value)));
@@ -806,8 +824,7 @@ impl<B: Bus> Machine<B> {
                 let address = self.gpr(rs1);
                 Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_LOAD)?;
                 let value = self
-                    .bus
-                    .read_u64(address)
+                    .bus_read_u64(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
                 self.reservation = Some(Self::reservation_set(address));
                 self.write(rd, value);
@@ -816,13 +833,11 @@ impl<B: Bus> Machine<B> {
                 let address = self.gpr(rs1);
                 let source = self.gpr(rs2);
                 Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_STORE)?;
-                self.bus
-                    .check_write(address, 4)
+                self.bus_check_write(address, 4, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 let success = self.reservation.take() == Some(Self::reservation_set(address));
                 if success {
-                    self.bus
-                        .write_u32(address, source as u32)
+                    self.bus_write_u32(address, source as u32, MemoryAccess::Store)
                         .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                     self.write(rd, 0);
                 } else {
@@ -833,13 +848,11 @@ impl<B: Bus> Machine<B> {
                 let address = self.gpr(rs1);
                 let source = self.gpr(rs2);
                 Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_STORE)?;
-                self.bus
-                    .check_write(address, 8)
+                self.bus_check_write(address, 8, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 let success = self.reservation.take() == Some(Self::reservation_set(address));
                 if success {
-                    self.bus
-                        .write_u64(address, source)
+                    self.bus_write_u64(address, source, MemoryAccess::Store)
                         .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                     self.write(rd, 0);
                 } else {
@@ -903,8 +916,7 @@ impl<B: Bus> Machine<B> {
             Instruction::Lb { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
-                    .bus
-                    .read_u8(address)
+                    .bus_read_u8(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?
                     as i8 as u64;
                 self.write(rd, value);
@@ -912,8 +924,7 @@ impl<B: Bus> Machine<B> {
             Instruction::Lh { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
-                    .bus
-                    .read_u16(address)
+                    .bus_read_u16(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?
                     as i16 as u64;
                 self.write(rd, value);
@@ -921,8 +932,7 @@ impl<B: Bus> Machine<B> {
             Instruction::Lw { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
-                    .bus
-                    .read_u32(address)
+                    .bus_read_u32(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?
                     as i32 as u64;
                 self.write(rd, value);
@@ -930,16 +940,14 @@ impl<B: Bus> Machine<B> {
             Instruction::Ld { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = self
-                    .bus
-                    .read_u64(address)
+                    .bus_read_u64(address, MemoryAccess::Load)
                     .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
                 self.write(rd, value);
             }
             Instruction::Lbu { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = u64::from(
-                    self.bus
-                        .read_u8(address)
+                    self.bus_read_u8(address, MemoryAccess::Load)
                         .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?,
                 );
                 self.write(rd, value);
@@ -947,8 +955,7 @@ impl<B: Bus> Machine<B> {
             Instruction::Lhu { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = u64::from(
-                    self.bus
-                        .read_u16(address)
+                    self.bus_read_u16(address, MemoryAccess::Load)
                         .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?,
                 );
                 self.write(rd, value);
@@ -956,37 +963,32 @@ impl<B: Bus> Machine<B> {
             Instruction::Lwu { rd, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
                 let value = u64::from(
-                    self.bus
-                        .read_u32(address)
+                    self.bus_read_u32(address, MemoryAccess::Load)
                         .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?,
                 );
                 self.write(rd, value);
             }
             Instruction::Sb { rs2, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
-                self.bus
-                    .write_u8(address, self.gpr(rs2) as u8)
+                self.bus_write_u8(address, self.gpr(rs2) as u8, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 1);
             }
             Instruction::Sh { rs2, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
-                self.bus
-                    .write_u16(address, self.gpr(rs2) as u16)
+                self.bus_write_u16(address, self.gpr(rs2) as u16, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 2);
             }
             Instruction::Sw { rs2, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
-                self.bus
-                    .write_u32(address, self.gpr(rs2) as u32)
+                self.bus_write_u32(address, self.gpr(rs2) as u32, MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 4);
             }
             Instruction::Sd { rs2, rs1, offset } => {
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
-                self.bus
-                    .write_u64(address, self.gpr(rs2))
+                self.bus_write_u64(address, self.gpr(rs2), MemoryAccess::Store)
                     .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
                 self.invalidate_reservation(address, 8);
             }
@@ -1053,6 +1055,7 @@ impl<B: Bus> Machine<B> {
             Instruction::Ecall => {
                 let cause = match self.cpu.privilege() {
                     PrivilegeMode::Machine => inst::CAUSE_MACHINE_ECALL,
+                    PrivilegeMode::Supervisor => inst::CAUSE_SUPERVISOR_ECALL,
                     PrivilegeMode::User => inst::CAUSE_USER_ECALL,
                 };
                 return Err(Exception::new(cause, 0));
@@ -1073,6 +1076,42 @@ impl<B: Bus> Machine<B> {
                 self.cpu.set_privilege(privilege);
                 self.cpu.set_pc(restored_pc);
                 return Ok(());
+            }
+            Instruction::Sret => {
+                if self.cpu.privilege() == PrivilegeMode::User
+                    || (self.cpu.privilege() == PrivilegeMode::Supervisor && self.cpu.csrs().tsr())
+                {
+                    return Err(Exception::new(
+                        inst::CAUSE_ILLEGAL_INSTRUCTION,
+                        u64::from(word),
+                    ));
+                }
+                Self::checked_target(self.cpu.csrs().supervisor_exception_pc())?;
+                let (restored_pc, privilege) = self.cpu.csrs_mut().return_from_s_trap();
+                self.cpu.set_privilege(privilege);
+                self.cpu.set_pc(restored_pc);
+                return Ok(());
+            }
+            Instruction::Wfi => {
+                if self.cpu.privilege() == PrivilegeMode::User
+                    || (self.cpu.privilege() == PrivilegeMode::Supervisor && self.cpu.csrs().tw())
+                {
+                    return Err(Exception::new(
+                        inst::CAUSE_ILLEGAL_INSTRUCTION,
+                        u64::from(word),
+                    ));
+                }
+            }
+            Instruction::SfenceVma { .. } => {
+                if self.cpu.privilege() == PrivilegeMode::User
+                    || (self.cpu.privilege() == PrivilegeMode::Supervisor
+                        && (self.cpu.csrs().tvm() || self.cpu.csrs().satp_mode_read_only_bare()))
+                {
+                    return Err(Exception::new(
+                        inst::CAUSE_ILLEGAL_INSTRUCTION,
+                        u64::from(word),
+                    ));
+                }
             }
             Instruction::Beq { rs1, rs2, offset } => {
                 if self.gpr(rs1) == self.gpr(rs2) {
@@ -1193,12 +1232,10 @@ impl<B: Bus> Machine<B> {
         let source = self.gpr(rs2) as u32;
         Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_STORE)?;
         let old = self
-            .bus
-            .read_u32(address)
+            .bus_read_u32(address, MemoryAccess::Store)
             .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
         let new = apply_amo_w(old, source, operation);
-        self.bus
-            .write_u32(address, new)
+        self.bus_write_u32(address, new, MemoryAccess::Store)
             .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
         self.invalidate_reservation(address, 4);
         self.write(rd, sign_extend_32(u64::from(old)));
@@ -1217,12 +1254,10 @@ impl<B: Bus> Machine<B> {
         let source = self.gpr(rs2);
         Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_STORE)?;
         let old = self
-            .bus
-            .read_u64(address)
+            .bus_read_u64(address, MemoryAccess::Store)
             .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
         let new = apply_amo_d(old, source, operation);
-        self.bus
-            .write_u64(address, new)
+        self.bus_write_u64(address, new, MemoryAccess::Store)
             .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
         self.invalidate_reservation(address, 8);
         self.write(rd, old);
@@ -1633,8 +1668,7 @@ impl<B: Bus> Machine<B> {
         self.require_cache_block_access(access, word)?;
         let address = self.gpr(rs1);
         let block = address & CACHE_BLOCK_ALIGNMENT_MASK;
-        self.bus
-            .check_write(block, CACHE_BLOCK_BYTES)
+        self.bus_check_write(block, CACHE_BLOCK_BYTES, MemoryAccess::Store)
             .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))
     }
 
@@ -1643,14 +1677,12 @@ impl<B: Bus> Machine<B> {
         self.require_cache_block_access(CacheBlockAccess::Zero, word)?;
         let address = self.gpr(rs1);
         let block = address & CACHE_BLOCK_ALIGNMENT_MASK;
-        self.bus
-            .check_write(block, CACHE_BLOCK_BYTES)
+        self.bus_check_write(block, CACHE_BLOCK_BYTES, MemoryAccess::Store)
             .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
 
         for index in 0..CACHE_BLOCK_DOUBLEWORDS {
             let offset = index * DOUBLEWORD_BYTES;
-            self.bus
-                .write_u64(block.wrapping_add(offset), 0)
+            self.bus_write_u64(block.wrapping_add(offset), 0, MemoryAccess::Store)
                 .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
         }
         self.invalidate_reservation(block, CACHE_BLOCK_BYTES);
@@ -1663,12 +1695,27 @@ impl<B: Bus> Machine<B> {
         access: CacheBlockAccess,
         word: u32,
     ) -> Result<(), Exception> {
-        let enabled = self.cpu.privilege() == PrivilegeMode::Machine
-            || match access {
-                CacheBlockAccess::CleanFlush => self.cpu.csrs().cache_block_clean_flush_enabled(),
-                CacheBlockAccess::Invalidate => self.cpu.csrs().cache_block_invalidate_enabled(),
-                CacheBlockAccess::Zero => self.cpu.csrs().cache_block_zero_enabled(),
-            };
+        let enabled = match (self.cpu.privilege(), access) {
+            (PrivilegeMode::Machine, _) => true,
+            (PrivilegeMode::Supervisor, CacheBlockAccess::CleanFlush) => {
+                self.cpu.csrs().supervisor_cache_block_clean_flush_enabled()
+            }
+            (PrivilegeMode::Supervisor, CacheBlockAccess::Invalidate) => {
+                self.cpu.csrs().supervisor_cache_block_invalidate_enabled()
+            }
+            (PrivilegeMode::Supervisor, CacheBlockAccess::Zero) => {
+                self.cpu.csrs().supervisor_cache_block_zero_enabled()
+            }
+            (PrivilegeMode::User, CacheBlockAccess::CleanFlush) => {
+                self.cpu.csrs().user_cache_block_clean_flush_enabled()
+            }
+            (PrivilegeMode::User, CacheBlockAccess::Invalidate) => {
+                self.cpu.csrs().user_cache_block_invalidate_enabled()
+            }
+            (PrivilegeMode::User, CacheBlockAccess::Zero) => {
+                self.cpu.csrs().user_cache_block_zero_enabled()
+            }
+        };
         if enabled {
             Ok(())
         } else {
@@ -1677,6 +1724,79 @@ impl<B: Bus> Machine<B> {
                 u64::from(word),
             ))
         }
+    }
+
+    /// Translates an execution address to a physical Bus address.
+    ///
+    /// Phase 1 supports Bare translation only. Sv39 will replace this identity
+    /// mapping without changing instruction execution paths.
+    fn translate_address(&self, address: u64, _access: MemoryAccess) -> u64 {
+        address
+    }
+
+    fn bus_read_u8(&mut self, address: u64, access: MemoryAccess) -> Result<u8, Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.read_u8(physical)
+    }
+
+    fn bus_read_u16(&mut self, address: u64, access: MemoryAccess) -> Result<u16, Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.read_u16(physical)
+    }
+
+    fn bus_read_u32(&mut self, address: u64, access: MemoryAccess) -> Result<u32, Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.read_u32(physical)
+    }
+
+    fn bus_read_u64(&mut self, address: u64, access: MemoryAccess) -> Result<u64, Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.read_u64(physical)
+    }
+
+    fn bus_write_u8(&mut self, address: u64, value: u8, access: MemoryAccess) -> Result<(), Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.write_u8(physical, value)
+    }
+
+    fn bus_write_u16(
+        &mut self,
+        address: u64,
+        value: u16,
+        access: MemoryAccess,
+    ) -> Result<(), Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.write_u16(physical, value)
+    }
+
+    fn bus_write_u32(
+        &mut self,
+        address: u64,
+        value: u32,
+        access: MemoryAccess,
+    ) -> Result<(), Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.write_u32(physical, value)
+    }
+
+    fn bus_write_u64(
+        &mut self,
+        address: u64,
+        value: u64,
+        access: MemoryAccess,
+    ) -> Result<(), Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.write_u64(physical, value)
+    }
+
+    fn bus_check_write(
+        &mut self,
+        address: u64,
+        width: u64,
+        access: MemoryAccess,
+    ) -> Result<(), Trap> {
+        let physical = self.translate_address(address, access);
+        self.bus.check_write(physical, width)
     }
 
     /// Reads an FPR, converting an unboxed value to the canonical NaN.
@@ -1982,6 +2102,7 @@ mod tests {
     use crate::memory::{DRAM_BASE, Memory};
 
     const HANDLER: u64 = DRAM_BASE + 32;
+    const SUPERVISOR_HANDLER: u64 = DRAM_BASE + 48;
     const COMPRESSED_ADD_X5_ONE: u16 = 0x4285;
     const COMPRESSED_ADDI_X5_ONE: u16 = 0x0285;
     const STANDARD_ADDI_X5_X0_THREE: u32 = 0x0030_0293;
@@ -1999,6 +2120,13 @@ mod tests {
     const MENVCFG_CBZE: u64 = 1 << 7;
     const FP_INITIAL_STATUS: u64 = 1 << 13;
     const FP_DIRTY_STATUS: u64 = 0b11 << 13;
+    const MSTATUS_SIE_BIT: u64 = 1 << 1;
+    const MSTATUS_SPIE_BIT: u64 = 1 << 5;
+    const MSTATUS_SPP_BIT: u64 = 1 << 8;
+    const MSTATUS_MPP_SUPERVISOR: u64 = 1 << 11;
+    const MSTATUS_TVM_BIT: u64 = 1 << 20;
+    const MSTATUS_TW_BIT: u64 = 1 << 21;
+    const MSTATUS_TSR_BIT: u64 = 1 << 22;
     const FADD_FT2_FT0_FT1: u32 = 0x0010_7153;
     const BOXED_ONE: u64 = 0xffff_ffff_3f80_0000;
     const BOXED_TWO: u64 = 0xffff_ffff_4000_0000;
@@ -2041,6 +2169,18 @@ mod tests {
         assert_eq!(machine.cpu().read_csr(inst::CSR_MTVAL), Some(tval), "mtval");
         assert_eq!(machine.cpu().read_csr(inst::CSR_MEPC), Some(epc), "mepc");
         assert_eq!(machine.cpu().pc(), HANDLER, "handler PC");
+    }
+
+    fn assert_supervisor_trap<B: Bus>(machine: &Machine<B>, cause: u8, tval: u64, epc: u64) {
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_SCAUSE),
+            Some(u64::from(cause)),
+            "scause"
+        );
+        assert_eq!(machine.cpu().read_csr(inst::CSR_STVAL), Some(tval), "stval");
+        assert_eq!(machine.cpu().read_csr(inst::CSR_SEPC), Some(epc), "sepc");
+        assert_eq!(machine.cpu().pc(), SUPERVISOR_HANDLER, "handler PC");
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Supervisor);
     }
 
     #[test]
@@ -3353,7 +3493,7 @@ mod tests {
     }
 
     #[test]
-    fn misa_reports_rv64imafdcbu_and_ignores_warl_writes() {
+    fn misa_reports_rv64imafdcbsu_and_ignores_warl_writes() {
         let mut machine = trapped_machine();
         machine.execute(Instruction::Csrrs {
             rd: 5,
@@ -3367,6 +3507,7 @@ mod tests {
         assert_ne!(misa & (1 << 5), 0, "F extension");
         assert_ne!(misa & (1 << 8), 0, "I extension");
         assert_ne!(misa & (1 << 12), 0, "M extension");
+        assert_ne!(misa & (1 << 18), 0, "S extension");
 
         machine.cpu_mut().write_gpr(5, 7);
         machine.cpu_mut().write_gpr(6, 0);
@@ -3416,6 +3557,183 @@ mod tests {
     }
 
     #[test]
+    fn delegated_user_ecall_enters_machine_handler_without_medeleg() {
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_STVEC, SUPERVISOR_HANDLER)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::User);
+        machine.cpu_mut().set_pc(DRAM_BASE + 4);
+
+        machine.execute(Instruction::Ecall);
+
+        assert_trap(&machine, inst::CAUSE_USER_ECALL, 0, DRAM_BASE + 4);
+        let status = machine.cpu().csrs().read(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(status & (0b11 << 11), 0, "MPP records U-mode");
+    }
+
+    #[test]
+    fn delegated_supervisor_ecall_enters_supervisor_handler() {
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_STVEC, SUPERVISOR_HANDLER)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MEDELEG, 1 << inst::CAUSE_SUPERVISOR_ECALL)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_SIE_BIT)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+        machine.cpu_mut().set_pc(DRAM_BASE + 4);
+
+        machine.execute(Instruction::Ecall);
+
+        assert_supervisor_trap(&machine, inst::CAUSE_SUPERVISOR_ECALL, 0, DRAM_BASE + 4);
+        let status = machine.cpu().csrs().read(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(status & MSTATUS_SIE_BIT, 0);
+        assert_eq!(status & MSTATUS_SPIE_BIT, MSTATUS_SPIE_BIT);
+        assert_eq!(status & MSTATUS_SPP_BIT, MSTATUS_SPP_BIT);
+    }
+
+    #[test]
+    fn delegated_user_ecall_uses_supervisor_handler() {
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_STVEC, SUPERVISOR_HANDLER)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MEDELEG, 1 << inst::CAUSE_USER_ECALL)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::User);
+        machine.cpu_mut().set_pc(DRAM_BASE + 8);
+
+        machine.execute(Instruction::Ecall);
+
+        assert_supervisor_trap(&machine, inst::CAUSE_USER_ECALL, 0, DRAM_BASE + 8);
+        let status = machine.cpu().csrs().read(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(status & MSTATUS_SPP_BIT, 0);
+    }
+
+    #[test]
+    fn sret_restores_supervisor_state_and_target() {
+        let mut machine = machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_SPIE_BIT | MSTATUS_SPP_BIT)
+        );
+        assert!(machine.cpu_mut().write_csr(inst::CSR_SEPC, DRAM_BASE + 16));
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+
+        machine.execute(Instruction::Sret);
+
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + 16);
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Supervisor);
+        let status = machine.cpu().csrs().read(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(status & MSTATUS_SIE_BIT, MSTATUS_SIE_BIT);
+        assert_eq!(status & MSTATUS_SPIE_BIT, MSTATUS_SPIE_BIT);
+        assert_eq!(status & MSTATUS_SPP_BIT, 0);
+    }
+
+    #[test]
+    fn privileged_instruction_controls_trap_in_supervisor_mode() {
+        for (instruction, status, cause) in [
+            (
+                Instruction::Sret,
+                MSTATUS_TSR_BIT,
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+            ),
+            (
+                Instruction::Wfi,
+                MSTATUS_TW_BIT,
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+            ),
+        ] {
+            let mut machine = trapped_machine();
+            assert!(machine.cpu_mut().write_csr(inst::CSR_MSTATUS, status));
+            machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+
+            machine.execute(instruction);
+
+            assert_trap(&machine, cause, 0, 0);
+        }
+    }
+
+    #[test]
+    fn wfi_is_a_no_op_without_interrupts() {
+        let mut machine = machine();
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+
+        machine.execute(Instruction::Wfi);
+
+        assert_eq!(machine.cpu().pc(), 4);
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Supervisor);
+    }
+
+    #[test]
+    fn supervisor_satp_is_warl_bare_and_tvm_is_read_only_zero() {
+        let mut machine = machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_TVM_BIT)
+        );
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MSTATUS).unwrap() & MSTATUS_TVM_BIT,
+            0
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+
+        let instruction = Instruction::Csrrw {
+            rd: 5,
+            csr: inst::CSR_SATP,
+            rs1: 1,
+        };
+        machine.cpu_mut().write_gpr(1, u64::MAX);
+
+        machine.execute(instruction);
+
+        assert_eq!(machine.cpu().read_gpr(5), 0);
+        assert_eq!(machine.cpu().read_csr(inst::CSR_SATP), Some(0));
+        assert_eq!(machine.cpu().pc(), 4);
+    }
+
+    #[test]
+    fn sfence_vma_traps_in_supervisor_mode_when_satp_is_read_only_bare() {
+        let mut supervisor_machine = trapped_machine();
+        assert!(
+            supervisor_machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_TVM_BIT)
+        );
+        supervisor_machine
+            .cpu_mut()
+            .set_privilege(PrivilegeMode::Supervisor);
+
+        supervisor_machine.execute(Instruction::SfenceVma { rs1: 0, rs2: 0 });
+
+        assert_trap(&supervisor_machine, inst::CAUSE_ILLEGAL_INSTRUCTION, 0, 0);
+
+        let mut machine_mode = machine();
+        machine_mode.execute(Instruction::SfenceVma { rs1: 0, rs2: 0 });
+        assert_eq!(machine_mode.cpu().pc(), 4);
+        assert_eq!(machine_mode.cpu().privilege(), PrivilegeMode::Machine);
+    }
+
+    #[test]
     fn ebreak_records_breakpoint_and_its_address() {
         let mut machine = trapped_machine();
         machine.cpu_mut().set_pc(DRAM_BASE + 8);
@@ -3447,12 +3765,28 @@ mod tests {
     }
 
     #[test]
+    fn mret_can_enter_supervisor_mode() {
+        let mut machine = machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_MPP_SUPERVISOR)
+        );
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MEPC, DRAM_BASE + 12));
+
+        machine.execute(Instruction::Mret);
+
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + 12);
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Supervisor);
+    }
+
+    #[test]
     fn illegal_instruction_fetch_enters_the_trap_handler() {
         let mut machine = trapped_machine();
         machine.cpu_mut().set_pc(DRAM_BASE);
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE, inst::MATCH_SRET)
+            .write_u32(DRAM_BASE, inst::MATCH_AMOCAS_D)
             .unwrap();
 
         machine.step(StepOptions::default());
@@ -3460,7 +3794,7 @@ mod tests {
         assert_trap(
             &machine,
             inst::CAUSE_ILLEGAL_INSTRUCTION,
-            u64::from(inst::MATCH_SRET),
+            u64::from(inst::MATCH_AMOCAS_D),
             DRAM_BASE,
         );
     }
@@ -3918,6 +4252,11 @@ mod tests {
                 .cpu_mut()
                 .write_csr(inst::CSR_MCOUNTEREN, HPM_COUNTER_3_BIT)
         );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_SCOUNTEREN, HPM_COUNTER_3_BIT)
+        );
         machine.cpu_mut().set_privilege(PrivilegeMode::User);
         assert_eq!(machine.cpu().read_csr(inst::CSR_HPMCOUNTER3), Some(0));
         assert_eq!(machine.cpu().read_csr(inst::CSR_HPMCOUNTER4), None);
@@ -4221,6 +4560,10 @@ mod tests {
         let mut enabled = machine();
         assert!(enabled.cpu_mut().write_csr(
             inst::CSR_MENVCFG,
+            MENVCFG_CBIE_FLUSH | MENVCFG_CBCFE | MENVCFG_CBZE
+        ));
+        assert!(enabled.cpu_mut().write_csr(
+            inst::CSR_SENVCFG,
             MENVCFG_CBIE_FLUSH | MENVCFG_CBCFE | MENVCFG_CBZE
         ));
         enabled.cpu_mut().set_privilege(PrivilegeMode::User);

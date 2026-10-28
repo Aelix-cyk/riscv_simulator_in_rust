@@ -21,6 +21,7 @@ pub const SP: u8 = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivilegeMode {
     User,
+    Supervisor,
     Machine,
 }
 
@@ -29,7 +30,17 @@ impl PrivilegeMode {
     pub(crate) const fn mpp_bits(self) -> u64 {
         match self {
             Self::User => 0,
+            Self::Supervisor => 0b01,
             Self::Machine => 0b11,
+        }
+    }
+
+    /// Numeric privilege ordering used by CSR access checks.
+    pub(crate) const fn rank(self) -> u8 {
+        match self {
+            Self::User => 0,
+            Self::Supervisor => 1,
+            Self::Machine => 2,
         }
     }
 }

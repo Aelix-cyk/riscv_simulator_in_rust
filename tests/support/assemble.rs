@@ -160,6 +160,15 @@ pub fn assemble_half(name: &str) -> Program {
     )
 }
 
+/// Assembles a fixture exercising M, S, and U privilege transitions.
+pub fn assemble_supervisor(name: &str) -> Program {
+    assemble_with_march_and_isa(
+        name,
+        "rv64imafdc_zicsr_zifencei",
+        Some("rv64imafdc_zicsr_zifencei"),
+    )
+}
+
 /// Assembles a fixture with the B-extension subsets enabled.
 pub fn assemble_bitmanip(name: &str) -> Program {
     assemble_with_march_and_isa(

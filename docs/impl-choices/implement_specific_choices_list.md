@@ -12,12 +12,12 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| Hart count and topology | One hart, hart ID 0, supporting M and U privilege modes | Decided |
+| Hart count and topology | One hart, hart ID 0, supporting M, S, and U privilege modes | Decided |
 | Reset PC, the platform's boot address | `DRAM_BASE` (`0x8000_0000`); images link and load there | Decided |
 | Reset value of GPRs and CSRs | All zero | Decided |
 | IALIGN | 16; Zca provides compressed instructions, so branch and jump targets need only be two-byte aligned | Decided |
 | Behaviour on a misaligned instruction address | Raise an instruction-address-misaligned exception when the PC or control-transfer target is not two-byte aligned | Decided |
-| `misa` | WARL RV64IMAFDCBU: `MXL = 2`, with A, B, C, D, F, I, M, and U fixed; writes are accepted and ignored | Decided |
+| `misa` | WARL RV64IMAFDCBSU: `MXL = 2`, with A, B, C, D, F, I, M, S, and U fixed; writes are accepted and ignored | Decided |
 | `mvendorid`, `marchid`, `mimpid` | Read-only zero | Decided |
 | Physical address width | Registers are 64-bit; the implemented physical space is the single DRAM region below | Decided |
 
@@ -32,21 +32,23 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Misaligned access outside cacheable, coherent main memory | Main memory supports misaligned access (Zicclsm); no other regions exist | Open |
 | Cache geometry and coherence | No cache model; architectural cache blocks are 64 bytes and naturally aligned | Decided |
 | Cache-block operations (Zicbom/bop/boz) | Management operations validate the full block and otherwise do nothing; `CBO.ZERO` preflights and clears the block; prefetches are untrapping hints | Decided |
-| CBO privilege controls | `menvcfg.CBZE`, `CBCFE`, and WARL `CBIE` gate U-mode operations and reset to zero; M-mode is always enabled | Decided |
+| CBO privilege controls | `menvcfg.CBZE`, `CBCFE`, and WARL `CBIE` gate S-mode operations; both `menvcfg` and `senvcfg` gate U-mode. M-mode is always enabled | Decided |
 
 ## 3. Traps, interrupts, counters, and timers
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| Trap vector base and alignment | `mtvec` implemented in Direct mode; base writes are masked to 4-byte alignment. `stvec` remains absent | Decided for M-mode |
-| Privilege transitions | `mret` enters the mode recorded in `mstatus.MPP`; M-mode CSR access from U-mode raises illegal-instruction | Decided |
+| Trap vector base and alignment | `mtvec` and `stvec` implement Direct mode; base writes are masked to 4-byte alignment | Decided |
+| Privilege transitions | `mret` enters `mstatus.MPP`; delegated traps enter S mode; `sret` enters `sstatus.SPP`; unsupported transitions trap | Decided |
+| Exception delegation | `medeleg` retains writable bits for implemented synchronous exceptions; traps originating in M mode are never delegated | Decided |
+| Interrupt state | `mie`, `mip`, `mideleg`, `sie`, and `sip` model supervisor interrupt state, but no physical interrupt source is connected | Decided for Phase 1 |
 | Interrupt controller | None | Open |
 | Timer facility | None; the profile deliberately leaves Sstc optional | Open |
 | Number of hardware performance counters | Three: `hpmcounter3`–`hpmcounter5`; counters 6–31 are read-only zero | Decided |
 | Hardware performance events | One-hot selector bits for retired instructions, loads, stores, and branches/jumps; faulting attempts do not count | Decided |
 | Base counters | Full 64-bit `mcycle` and `minstret`, with `cycle`, `time`, and `instret` aliases; `time` mirrors `mcycle` | Decided |
-| Counter access control | `mcounteren` gates U-mode reads; `mcountinhibit` stops base and HPM counting | Decided |
-| `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; `PAUSE` executes as a NOP | Decided for `PAUSE` |
+| Counter access control | `mcounteren` gates S/U reads, and `scounteren` additionally gates U reads; `mcountinhibit` stops base and HPM counting | Decided |
+| `WFI` and `PAUSE` behaviour | `WFI` is a no-op in M/S mode and illegal in U mode; `mstatus.TW` makes S-mode `WFI` illegal. `PAUSE` executes as a no-op | Decided |
 | Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
 
 ### HPM event selector encoding
@@ -108,6 +110,8 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 |---|---|---|
 | Program container | Flat binary, loaded at `DRAM_BASE` | Decided |
 | Program start | Entry is the load address; the CLI sets the PC there | Decided |
+| Address translation | Fetch and memory accesses use one central translation hook; Phase 1 maps virtual addresses identically to physical addresses | Decided for Phase 1 |
+| Translation controls | `satp.MODE` is read-only Bare in Phase 1, so `mstatus.TVM`, `SUM`, and `MXR` are read-only zero. `sfence.vma` is a no-op in M mode and traps in S mode | Decided for Phase 1 |
 | Halt and exit signalling | Halt self-loop, `jal x0, 0`; `ecall` enters the machine trap handler | Decided (temporary) |
 | Host I/O | Production host I/O remains absent. Compliance harnesses detect test-only `tohost` PASS/FAIL stores | Decided for tests |
 

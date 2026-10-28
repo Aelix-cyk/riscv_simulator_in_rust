@@ -3,4 +3,5 @@ riscv-tests/rv64ua-p-amocas_d	unsupported	Zacas compare-and-swap is not implemen
 riscv-tests/rv64ua-p-amocas_q	unsupported	Zacas compare-and-swap is not implemented
 riscv-tests/rv64ua-p-amocas_w	unsupported	Zacas compare-and-swap is not implemented
 riscv-tests/rv64mi-p-breakpoint	known-bug	Breakpoint trap behavior does not yet match the compliance test
-riscv-tests/rv64mi-p-illegal	known-bug	Illegal-instruction trap behavior does not yet match the compliance test
+riscv-tests/rv64si-p-dirty	unsupported	Sv39 page-table A/D behavior is deferred to the translation milestone
+riscv-tests/rv64si-p-icache-alias	unsupported	Sv39 virtual-address alias behavior is deferred to the translation milestone
