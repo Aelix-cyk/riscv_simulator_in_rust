@@ -35,8 +35,11 @@ implemented_extensions:
   - { name: Zfhmin, version: "= 1.0.0" }
   - { name: Zfh, version: "= 1.0.0" }
   - { name: Sscounterenw, version: "= 1.0.0" }
+  - { name: Ssccptr, version: "= 1.0.0" }
   - { name: Sstvala, version: "= 1.0.0" }
   - { name: Sstvecd, version: "= 1.0.0" }
+  - { name: Sv39, version: "= 1.0.0" }
+  - { name: Svade, version: "= 1.0.0" }
   - { name: Svbare, version: "= 1.0.0" }
   - { name: Sm, version: "= 1.12.0" }
 
@@ -66,7 +69,7 @@ params:
   TRAP_ON_ECALL_FROM_U: true
   # S params
   MUTABLE_MISA_S: false
-  ASID_WIDTH: 0
+  ASID_WIDTH: 16
   S_MODE_ENDIANNESS: little
   SXLEN: [64]
   REPORT_VA_IN_STVAL_ON_BREAKPOINT: true
@@ -91,7 +94,6 @@ params:
   STVEC_MODES: [0]
   SATP_MODE_BARE: true
   TRAP_ON_ECALL_FROM_S: true
-  TRAP_ON_SFENCE_VMA_WHEN_SATP_MODE_IS_READ_ONLY: true
   # CMO params
   CACHE_BLOCK_SIZE: 64
   FORCE_UPGRADE_CBO_INVAL_TO_FLUSH: false

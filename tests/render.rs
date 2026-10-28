@@ -39,6 +39,7 @@ fn renderer_matches_objdump_text() {
     check_fixture("compressed_d.S", assemble::assemble_double);
     check_fixture("h.S", assemble::assemble_half);
     check_fixture("supervisor.S", assemble::assemble_supervisor);
+    check_fixture("sv39.S", assemble::assemble_supervisor);
     for fixture in BITMANIP_FIXTURES {
         check_fixture(fixture, assemble::assemble_bitmanip);
     }

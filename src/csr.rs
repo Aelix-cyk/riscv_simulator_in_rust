@@ -23,6 +23,8 @@ const MSTATUS_FS_SHIFT: u32 = 13;
 const MSTATUS_FS_MASK: u64 = 0b11 << MSTATUS_FS_SHIFT;
 const MSTATUS_FS_DIRTY: u64 = 0b11 << MSTATUS_FS_SHIFT;
 const MSTATUS_MPRV: u64 = 1 << 17;
+const MSTATUS_SUM: u64 = 1 << 18;
+const MSTATUS_MXR: u64 = 1 << 19;
 const MSTATUS_TVM: u64 = 1 << 20;
 const MSTATUS_TW: u64 = 1 << 21;
 const MSTATUS_TSR: u64 = 1 << 22;
@@ -35,10 +37,14 @@ const MSTATUS_WRITABLE: u64 = MSTATUS_SIE
     | MSTATUS_MPP_MASK
     | MSTATUS_FS_MASK
     | MSTATUS_MPRV
+    | MSTATUS_SUM
+    | MSTATUS_MXR
+    | MSTATUS_TVM
     | MSTATUS_TW
     | MSTATUS_TSR;
 const MSTATUS_FIXED: u64 = MSTATUS_UXL | MSTATUS_SXL;
-const SSTATUS_WRITABLE: u64 = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_FS_MASK;
+const SSTATUS_WRITABLE: u64 =
+    MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_FS_MASK | MSTATUS_SUM | MSTATUS_MXR;
 const SSTATUS_VISIBLE: u64 = SSTATUS_WRITABLE | MSTATUS_UXL | MSTATUS_SD;
 const MXL_SHIFT: u32 = 62;
 const MXL_64: u64 = 2;
@@ -116,6 +122,12 @@ const MENVCFG_CBCFE: u64 = 1 << 6;
 const MENVCFG_CBZE: u64 = 1 << 7;
 const MENVCFG_WRITABLE: u64 = MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE;
 const SENVCFG_WRITABLE: u64 = MENVCFG_WRITABLE;
+const SATP_MODE_SHIFT: u32 = 60;
+const SATP_MODE_MASK: u64 = 0xf << SATP_MODE_SHIFT;
+const SATP_SV39_MODE: u64 = 8;
+const SATP_ASID_SHIFT: u32 = 44;
+const SATP_ASID_MASK: u64 = (1 << 16) - 1;
+const SATP_PPN_MASK: u64 = (1 << 44) - 1;
 
 const fn exception_bit(cause: u8) -> u64 {
     1_u64 << cause
@@ -161,6 +173,7 @@ pub(crate) struct Csrs {
     sepc: u64,
     scause: u64,
     stval: u64,
+    satp: u64,
     mhpmcounters: [u64; HPM_COUNTER_COUNT],
     mhpmevents: [u64; HPM_COUNTER_COUNT],
     mcycle: u64,
@@ -207,7 +220,7 @@ impl Csrs {
             inst::CSR_SEPC => Some(self.sepc),
             inst::CSR_SCAUSE => Some(self.scause),
             inst::CSR_STVAL => Some(self.stval),
-            inst::CSR_SATP => Some(0),
+            inst::CSR_SATP => Some(self.satp),
             inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => self.read_mhpmevent(address),
             inst::CSR_PMPCFG0 => Some(self.pmpcfg0),
             inst::CSR_PMPADDR0 => Some(self.pmpaddr0),
@@ -308,8 +321,7 @@ impl Csrs {
             inst::CSR_MHPMCOUNTER3..=inst::CSR_MHPMCOUNTER31 => {
                 self.write_mhpmcounter(address, value);
             }
-            // `satp` is WARL with Bare as its only supported mode.
-            inst::CSR_SATP => {}
+            inst::CSR_SATP => self.satp = Self::satp_value(value),
             _ => return false,
         }
         true
@@ -359,6 +371,14 @@ impl Csrs {
             PrivilegeMode::Supervisor => self.mcounteren & bit != 0,
             PrivilegeMode::User => self.mcounteren & bit != 0 && self.scounteren & bit != 0,
         }
+    }
+
+    fn satp_value(value: u64) -> u64 {
+        let mode = value & SATP_MODE_MASK;
+        if mode != 0 && mode != SATP_SV39_MODE << SATP_MODE_SHIFT {
+            return 0;
+        }
+        mode | (value & ((SATP_ASID_MASK << SATP_ASID_SHIFT) | SATP_PPN_MASK))
     }
 
     fn is_read_only(address: u16) -> bool {
@@ -436,10 +456,30 @@ impl Csrs {
         self.mstatus & MSTATUS_TVM != 0
     }
 
-    /// Whether translation-control instructions are unavailable because
-    /// `satp.MODE` is read-only Bare.
-    pub(crate) fn satp_mode_read_only_bare(self) -> bool {
-        true
+    pub(crate) fn satp(self) -> u64 {
+        self.satp
+    }
+
+    pub(crate) fn sum(self) -> bool {
+        self.mstatus & MSTATUS_SUM != 0
+    }
+
+    pub(crate) fn mxr(self) -> bool {
+        self.mstatus & MSTATUS_MXR != 0
+    }
+
+    /// Effective privilege for an explicit load/store, honoring `MPRV`.
+    pub(crate) fn effective_privilege(
+        self,
+        current: PrivilegeMode,
+        explicit_access: bool,
+    ) -> PrivilegeMode {
+        if current == PrivilegeMode::Machine && explicit_access && self.mstatus & MSTATUS_MPRV != 0
+        {
+            self.mpp_mode()
+        } else {
+            current
+        }
     }
 
     /// Whether S-mode `sret` is blocked by `mstatus.TSR`.
@@ -844,12 +884,31 @@ mod tests {
             Some(0)
         );
         assert!(csrs.write(inst::CSR_MSTATUS, MSTATUS_TVM));
-        assert_eq!(csrs.read(inst::CSR_MSTATUS).unwrap() & MSTATUS_TVM, 0);
-        assert!(csrs.write_with_privilege(inst::CSR_SATP, 0, PrivilegeMode::Supervisor));
+        assert_eq!(
+            csrs.read(inst::CSR_MSTATUS).unwrap() & MSTATUS_TVM,
+            MSTATUS_TVM
+        );
+        assert_eq!(
+            csrs.read_with_privilege(inst::CSR_SATP, PrivilegeMode::Supervisor),
+            None
+        );
+        assert!(!csrs.write_with_privilege(inst::CSR_SATP, 0, PrivilegeMode::Supervisor));
         assert_eq!(
             csrs.read_with_privilege(inst::CSR_SATP, PrivilegeMode::Machine),
             Some(0)
         );
+    }
+
+    #[test]
+    fn satp_retains_sv39_mode_asid_and_ppn() {
+        let mut csrs = Csrs::default();
+        let satp =
+            SATP_SV39_MODE << SATP_MODE_SHIFT | 0xabcd_u64 << SATP_ASID_SHIFT | 0x123_4567_89ab;
+
+        assert!(csrs.write(inst::CSR_SATP, satp));
+        assert_eq!(csrs.read(inst::CSR_SATP), Some(satp));
+        assert!(csrs.write(inst::CSR_SATP, 1 << SATP_MODE_SHIFT));
+        assert_eq!(csrs.read(inst::CSR_SATP), Some(0));
     }
 
     #[test]

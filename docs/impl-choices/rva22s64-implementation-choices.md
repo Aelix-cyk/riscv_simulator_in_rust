@@ -50,9 +50,9 @@ mandatory here by reference, so these rows gate conformance too.
 | Zifencei | Instruction-fetch fence | Fixed | Only standard icache-coherence hook |
 | Ss1p12 | Privileged architecture version 1.12 | Fixed | |
 | Svbare | `satp.MODE` = Bare | Fixed | |
-| Sv39 | 39-bit page-based virtual memory | Fixed | |
-| Svade | Page faults on clear A/D bits; no hardware A/D update | Fixed | |
-| Ssccptr | Hardware page-table reads in cacheable, coherent main memory | Fixed | |
+| Sv39 | 39-bit page-based virtual memory | Implemented | Bare/Sv39, 4 KiB and superpages, 16-bit ASID |
+| Svade | Page faults on clear A/D bits; no hardware A/D update | Implemented | |
+| Ssccptr | Hardware page-table reads in cacheable, coherent main memory | Implemented | Page walks use the DRAM bus |
 | Sstvecd | `stvec.MODE` = Direct; any valid four-byte-aligned `stvec.BASE` | Fixed | |
 | Sstvala | `stval` contents on specified faults | Fixed | |
 | Sscounterenw | Writable `scounteren` bits for non-zero `hpmcounter`s | Fixed | |

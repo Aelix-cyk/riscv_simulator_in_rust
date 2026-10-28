@@ -25,6 +25,11 @@ category and listed alphabetically within each section.
 - **Register file** — The collection of all registers a hart can read and write directly.
 - **RISC-V** — An open, modular, royalty-free instruction set architecture.
 - **RV64I** — The 64-bit base integer ISA, the minimal instruction set this simulator targets, extended by the RVA22S64 profile.
+- **Sv39** — RISC-V's 39-bit, three-level page-based virtual-memory scheme.
+- **Svade** — A mode where invalid Accessed or Dirty PTE state raises page faults instead of being updated in hardware.
+- **TLB** — Translation Lookaside Buffer: a cache of virtual-to-physical page mappings.
+- **ASID** — Address Space Identifier, used to distinguish TLB entries belonging to different address spaces.
+- **PTE** — Page Table Entry, describing a page-table link or leaf mapping and its permissions.
 - **Sign-extension** — Widening a value by filling the new high bits with copies of its sign bit, preserving its two's-complement value.
 - **Word** — A 32-bit value, four consecutive bytes.
 - **x0** — The first integer register, hardwired to zero; writes are ignored and reads always yield 0.

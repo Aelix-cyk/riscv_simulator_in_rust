@@ -26,6 +26,7 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
 | DRAM base and size | `0x8000_0000`, 1 MiB — the spec fixes no addresses | Decided (will grow) |
+| Page tables | Sv39 page tables are physically addressed and must reside in the cacheable initial DRAM region | Decided |
 | MMIO regions (UART, interrupt controller, debug module) | None | Open |
 | PMA regions and attributes | The whole region is cacheable, coherent main memory | Open (implicit today) |
 | PMP entries and granularity | None | Open |
@@ -110,8 +111,9 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 |---|---|---|
 | Program container | Flat binary, loaded at `DRAM_BASE` | Decided |
 | Program start | Entry is the load address; the CLI sets the PC there | Decided |
-| Address translation | Fetch and memory accesses use one central translation hook; Phase 1 maps virtual addresses identically to physical addresses | Decided for Phase 1 |
-| Translation controls | `satp.MODE` is read-only Bare in Phase 1, so `mstatus.TVM`, `SUM`, and `MXR` are read-only zero. `sfence.vma` is a no-op in M mode and traps in S mode | Decided for Phase 1 |
+| Address translation | Fetch and memory accesses use one central Bare/Sv39 path with per-byte translation for cross-page accesses | Decided |
+| Translation controls | `satp` supports Bare and Sv39 with a 16-bit ASID; `mstatus.TVM`, `SUM`, and `MXR` are writable, and `sfence.vma` honors ASID/VA forms | Decided |
+| Translation cache | One unified, fully associative 64-entry TLB with FIFO replacement and global mappings | Decided |
 | Halt and exit signalling | Halt self-loop, `jal x0, 0`; `ecall` enters the machine trap handler | Decided (temporary) |
 | Host I/O | Production host I/O remains absent. Compliance harnesses detect test-only `tohost` PASS/FAIL stores | Decided for tests |
 

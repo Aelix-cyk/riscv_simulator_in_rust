@@ -11,5 +11,6 @@ pub(crate) mod fp64;
 pub(crate) mod inst;
 pub mod machine;
 pub mod memory;
+pub(crate) mod mmu;
 pub(crate) mod opcodes;
 pub mod trap;
