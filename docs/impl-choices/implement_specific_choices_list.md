@@ -91,7 +91,7 @@ Same rows as section 4 of `rva22s64-implementation-choices.md`, with our answer:
 
 | Area | Ours |
 |---|---|
-| Cache geometry and coherence | No cache model — Open |
+| Cache geometry and coherence | No cache model; 64-byte, naturally aligned architectural blocks — Decided |
 | PMP entries and granularity | None — Open |
 | PMA regions and attributes | One implicit cacheable region — Open |
 | Interrupt controller | None — Open |

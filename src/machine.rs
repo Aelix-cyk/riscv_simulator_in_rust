@@ -1150,7 +1150,10 @@ impl<B: Bus> Machine<B> {
     fn invalidate_reservation(&mut self, address: u64, width: u64) {
         let first = Self::reservation_set(address);
         let last = Self::reservation_set(address.saturating_add(width - 1));
-        if self.reservation == Some(first) || self.reservation == Some(last) {
+        if self
+            .reservation
+            .is_some_and(|reserved| reserved >= first && reserved <= last)
+        {
             self.reservation = None;
         }
     }
@@ -3978,5 +3981,61 @@ mod tests {
 
         assert_eq!(machine.cpu().read_csr(inst::CSR_MCAUSE), Some(0));
         assert_eq!(machine.cpu().pc(), DRAM_BASE + 16);
+    }
+
+    #[test]
+    fn cache_block_zero_invalidates_every_reservation_set_in_the_block() {
+        let block = DRAM_BASE + 0x100;
+        for offset in 0..CACHE_BLOCK_DOUBLEWORDS {
+            let address = block + offset * DOUBLEWORD_BYTES;
+            let mut machine = Machine::new(Memory::new());
+            machine.cpu_mut().set_pc(DRAM_BASE);
+            machine.cpu_mut().write_gpr(1, block);
+            machine.cpu_mut().write_gpr(3, address);
+
+            machine.execute(Instruction::LrD {
+                rd: 2,
+                rs1: 3,
+                aq: false,
+                rl: false,
+            });
+            machine.execute(Instruction::CboZero { rs1: 1 });
+            machine.execute(Instruction::ScD {
+                rd: 5,
+                rs1: 3,
+                rs2: 4,
+                aq: false,
+                rl: false,
+            });
+
+            assert_eq!(machine.cpu().read_gpr(5), 1, "offset {offset}");
+        }
+    }
+
+    #[test]
+    fn cache_block_zero_preserves_reservations_outside_the_block() {
+        let block = DRAM_BASE + 0x100;
+        let outside = block + CACHE_BLOCK_BYTES;
+        let mut machine = Machine::new(Memory::new());
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(1, block);
+        machine.cpu_mut().write_gpr(3, outside);
+
+        machine.execute(Instruction::LrD {
+            rd: 2,
+            rs1: 3,
+            aq: false,
+            rl: false,
+        });
+        machine.execute(Instruction::CboZero { rs1: 1 });
+        machine.execute(Instruction::ScD {
+            rd: 5,
+            rs1: 3,
+            rs2: 4,
+            aq: false,
+            rl: false,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(5), 0);
     }
 }

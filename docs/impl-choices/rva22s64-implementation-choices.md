@@ -85,7 +85,7 @@ mandatory here by reference, so these rows gate conformance too.
 
 | Area | Choice | Status | Notes |
 |---|---|---|---|
-| Cache geometry and coherence | | Undecided | Geometry is free only within Zic64b: 64-byte, naturally aligned blocks, or a compatible longer/shorter scheme |
+| Cache geometry and coherence | No cache model | Implemented | 64-byte, naturally aligned architectural blocks |
 | PMP entries and granularity | | Undecided | |
 | PMA regions and attributes | | Undecided | |
 | Interrupt controller | | Undecided | |
