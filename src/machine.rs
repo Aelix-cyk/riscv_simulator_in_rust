@@ -188,6 +188,10 @@ impl<B: Bus> Machine<B> {
     /// Synchronous faults enter the machine or delegated supervisor trap
     /// handler instead of escaping this method.
     pub fn step(&mut self, options: StepOptions) {
+        if self.take_pending_supervisor_interrupt() {
+            self.cpu.csrs_mut().advance_cycle();
+            return;
+        }
         let pc = self.cpu.pc();
         let instruction = match self.fetch_decoded() {
             Ok(instruction) => instruction,
@@ -201,6 +205,18 @@ impl<B: Bus> Machine<B> {
             println!("{pc:#010x}  {}", instruction.render());
         }
         self.execute_with_decoded(instruction);
+    }
+
+    fn take_pending_supervisor_interrupt(&mut self) -> bool {
+        let previous = self.cpu.privilege();
+        let Some(cause) = self.cpu.csrs().pending_supervisor_interrupt(previous) else {
+            return false;
+        };
+        let epc = self.cpu.pc();
+        self.cpu.csrs_mut().enter_s_trap(epc, cause, 0, previous);
+        self.cpu.set_privilege(PrivilegeMode::Supervisor);
+        self.cpu.set_pc(self.cpu.csrs().supervisor_trap_vector());
+        true
     }
 
     /// Runs until the halt self-loop retires or `step_limit` steps are taken.
@@ -1940,9 +1956,20 @@ fn fused_signs(op: FpFusedOp) -> (bool, bool) {
 fn instruction_word(instruction: Instruction) -> u32 {
     const CSR_SHIFT: u32 = 20;
     const RS1_SHIFT: u32 = 15;
+    const RS2_SHIFT: u32 = 20;
     const RD_SHIFT: u32 = 7;
 
     let (opcode, rd, rs1, csr) = match instruction {
+        Instruction::Ecall => return inst::MATCH_ECALL,
+        Instruction::Ebreak => return inst::MATCH_EBREAK,
+        Instruction::Mret => return inst::MATCH_MRET,
+        Instruction::Sret => return inst::MATCH_SRET,
+        Instruction::Wfi => return inst::MATCH_WFI,
+        Instruction::SfenceVma { rs1, rs2 } => {
+            return inst::MATCH_SFENCE_VMA
+                | (u32::from(rs1) << RS1_SHIFT)
+                | (u32::from(rs2) << RS2_SHIFT);
+        }
         Instruction::Csrrw { rd, csr, rs1 } => (inst::MATCH_CSRRW, rd, rs1, csr),
         Instruction::Csrrs { rd, csr, rs1 } => (inst::MATCH_CSRRS, rd, rs1, csr),
         Instruction::Csrrc { rd, csr, rs1 } => (inst::MATCH_CSRRC, rd, rs1, csr),
@@ -2127,6 +2154,7 @@ mod tests {
     const MSTATUS_TVM_BIT: u64 = 1 << 20;
     const MSTATUS_TW_BIT: u64 = 1 << 21;
     const MSTATUS_TSR_BIT: u64 = 1 << 22;
+    const INTERRUPT_CAUSE_BIT: u64 = 1 << 63;
     const FADD_FT2_FT0_FT1: u32 = 0x0010_7153;
     const BOXED_ONE: u64 = 0xffff_ffff_3f80_0000;
     const BOXED_TWO: u64 = 0xffff_ffff_4000_0000;
@@ -3542,6 +3570,35 @@ mod tests {
     }
 
     #[test]
+    fn system_instruction_words_round_trip_through_generated_encodings() {
+        const SFENCE_RS1: u8 = 5;
+        const SFENCE_RS2: u8 = 6;
+        const RS1_FIELD_SHIFT: u32 = 15;
+        const RS2_FIELD_SHIFT: u32 = 20;
+        let cases = [
+            (Instruction::Ecall, inst::MATCH_ECALL),
+            (Instruction::Ebreak, inst::MATCH_EBREAK),
+            (Instruction::Mret, inst::MATCH_MRET),
+            (Instruction::Sret, inst::MATCH_SRET),
+            (Instruction::Wfi, inst::MATCH_WFI),
+            (
+                Instruction::SfenceVma {
+                    rs1: SFENCE_RS1,
+                    rs2: SFENCE_RS2,
+                },
+                inst::MATCH_SFENCE_VMA
+                    | (u32::from(SFENCE_RS1) << RS1_FIELD_SHIFT)
+                    | (u32::from(SFENCE_RS2) << RS2_FIELD_SHIFT),
+            ),
+        ];
+
+        for (instruction, expected) in cases {
+            assert_eq!(instruction_word(instruction), expected);
+            assert_eq!(decode(expected), Ok(instruction));
+        }
+    }
+
+    #[test]
     fn ecall_enters_the_machine_trap_handler_precisely() {
         let mut machine = trapped_machine();
         machine.cpu_mut().set_pc(DRAM_BASE + 4);
@@ -3628,6 +3685,40 @@ mod tests {
     }
 
     #[test]
+    fn software_pending_supervisor_timer_interrupt_enters_supervisor_handler() {
+        const SUPERVISOR_TIMER_INTERRUPT: u64 = 5;
+        const STIP: u64 = 1 << SUPERVISOR_TIMER_INTERRUPT;
+
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_STVEC, SUPERVISOR_HANDLER)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_SIE_BIT)
+        );
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MIDELEG, STIP));
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MIE, STIP));
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MIP, STIP));
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+        machine.cpu_mut().set_pc(DRAM_BASE + 16);
+
+        machine.step(StepOptions::default());
+
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_SCAUSE),
+            Some(INTERRUPT_CAUSE_BIT | SUPERVISOR_TIMER_INTERRUPT)
+        );
+        assert_eq!(machine.cpu().read_csr(inst::CSR_STVAL), Some(0));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_SEPC), Some(DRAM_BASE + 16));
+        assert_eq!(machine.cpu().pc(), SUPERVISOR_HANDLER);
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Supervisor);
+    }
+
+    #[test]
     fn sret_restores_supervisor_state_and_target() {
         let mut machine = machine();
         assert!(
@@ -3650,26 +3741,60 @@ mod tests {
 
     #[test]
     fn privileged_instruction_controls_trap_in_supervisor_mode() {
-        for (instruction, status, cause) in [
+        for (instruction, status, privilege, expected_tval) in [
             (
                 Instruction::Sret,
                 MSTATUS_TSR_BIT,
-                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                PrivilegeMode::Supervisor,
+                inst::MATCH_SRET,
             ),
             (
                 Instruction::Wfi,
                 MSTATUS_TW_BIT,
-                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                PrivilegeMode::Supervisor,
+                inst::MATCH_WFI,
             ),
+            (Instruction::Sret, 0, PrivilegeMode::User, inst::MATCH_SRET),
+            (Instruction::Wfi, 0, PrivilegeMode::User, inst::MATCH_WFI),
         ] {
             let mut machine = trapped_machine();
             assert!(machine.cpu_mut().write_csr(inst::CSR_MSTATUS, status));
-            machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+            machine.cpu_mut().set_privilege(privilege);
 
             machine.execute(instruction);
 
-            assert_trap(&machine, cause, 0, 0);
+            assert_trap(
+                &machine,
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                u64::from(expected_tval),
+                0,
+            );
         }
+    }
+
+    #[test]
+    fn delegated_illegal_instruction_reports_encoding_in_stval() {
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_STVEC, SUPERVISOR_HANDLER)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MEDELEG, 1 << inst::CAUSE_ILLEGAL_INSTRUCTION)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::User);
+
+        machine.execute(Instruction::Sret);
+
+        assert_supervisor_trap(
+            &machine,
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(inst::MATCH_SRET),
+            0,
+        );
     }
 
     #[test]
@@ -3725,7 +3850,12 @@ mod tests {
 
         supervisor_machine.execute(Instruction::SfenceVma { rs1: 0, rs2: 0 });
 
-        assert_trap(&supervisor_machine, inst::CAUSE_ILLEGAL_INSTRUCTION, 0, 0);
+        assert_trap(
+            &supervisor_machine,
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(inst::MATCH_SFENCE_VMA),
+            0,
+        );
 
         let mut machine_mode = machine();
         machine_mode.execute(Instruction::SfenceVma { rs1: 0, rs2: 0 });

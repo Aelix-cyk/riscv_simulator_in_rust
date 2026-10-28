@@ -14,3 +14,7 @@
 | [0010 — CBO.ZERO leaves reservations in the middle of the block valid](0010-cbo-zero-leaves-middle-reservations-valid.md) | Fixed |
 | [0011 — cache-geometry status contradicts itself across the choice docs](0011-cache-geometry-status-inconsistent.md) | Fixed |
 | [0012 — widening FP conversions skip rounding-field validation](0012-widening-fp-conversions-skip-rounding-validation.md) | Fixed |
+| [0013 — mip/sip writes drop writable STIP and SEIP bits](0013-mip-writable-mask-omits-supervisor-pending-bits.md) | Fixed |
+| [0014 — direct execute records zero tval for system instructions](0014-direct-execute-tval-zero-for-system-instructions.md) | Fixed |
+| [0015 — supervisor fixture sets VS instead of SIE](0015-supervisor-fixture-sets-vs-instead-of-sie.md) | Fixed |
+| [0016 — unimplemented-opcode trap documentation ignores delegation](0016-unimplemented-opcode-trap-doc-stale.md) | Fixed |

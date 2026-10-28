@@ -26,9 +26,11 @@ supervisor_entry:
 	li	t0, 0x123
 	csrw	sscratch, t0
 	csrr	s0, sscratch
-	li	t0, 0x200              # sstatus.SIE.
+	li	t0, 0x2                # sstatus.SIE.
 	csrw	sstatus, t0
 	csrr	s1, sstatus
+	andi	s2, s1, 0x2
+	bne	s2, t0, machine_trap
 	csrw	satp, zero
 	csrr	s3, satp
 	ecall
@@ -48,6 +50,10 @@ after_user_ecall:
 	j	halt
 
 supervisor_trap:
+	csrr	t1, sstatus
+	andi	t1, t1, 0x22           # SIE must be clear and SPIE set.
+	li	t2, 0x20
+	bne	t1, t2, machine_trap
 	csrr	s4, scause
 	csrr	s5, sepc
 	csrr	s6, stval

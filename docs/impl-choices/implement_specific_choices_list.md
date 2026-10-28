@@ -41,7 +41,7 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Trap vector base and alignment | `mtvec` and `stvec` implement Direct mode; base writes are masked to 4-byte alignment | Decided |
 | Privilege transitions | `mret` enters `mstatus.MPP`; delegated traps enter S mode; `sret` enters `sstatus.SPP`; unsupported transitions trap | Decided |
 | Exception delegation | `medeleg` retains writable bits for implemented synchronous exceptions; traps originating in M mode are never delegated | Decided |
-| Interrupt state | `mie`, `mip`, `mideleg`, `sie`, and `sip` model supervisor interrupt state, but no physical interrupt source is connected | Decided for Phase 1 |
+| Interrupt state | `mie`, `mip`, `mideleg`, `sie`, and `sip` support software-written supervisor pending bits; no external interrupt source is connected | Decided for Phase 1 |
 | Interrupt controller | None | Open |
 | Timer facility | None; the profile deliberately leaves Sstc optional | Open |
 | Number of hardware performance counters | Three: `hpmcounter3`–`hpmcounter5`; counters 6–31 are read-only zero | Decided |
@@ -49,7 +49,7 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Base counters | Full 64-bit `mcycle` and `minstret`, with `cycle`, `time`, and `instret` aliases; `time` mirrors `mcycle` | Decided |
 | Counter access control | `mcounteren` gates S/U reads, and `scounteren` additionally gates U reads; `mcountinhibit` stops base and HPM counting | Decided |
 | `WFI` and `PAUSE` behaviour | `WFI` is a no-op in M/S mode and illegal in U mode; `mstatus.TW` makes S-mode `WFI` illegal. `PAUSE` executes as a no-op | Decided |
-| Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
+| Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec`, or through `stvec` when delegated via `medeleg` | Decided |
 
 ### HPM event selector encoding
 

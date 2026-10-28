@@ -98,4 +98,4 @@ mandatory here by reference, so these rows gate conformance too.
 
 | Clause | Recommendation | Status |
 |---|---|---|
-| RVA22S64 | Illegal-instruction exception on unimplemented opcodes | Undecided |
+| RVA22S64 | Illegal-instruction exception on unimplemented opcodes | Decided | Routed through `mtvec`, or `stvec` when delegated |

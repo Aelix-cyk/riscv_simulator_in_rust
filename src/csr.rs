@@ -91,7 +91,11 @@ const INTERRUPT_MASK: u64 = INTERRUPT_SSIP
     | INTERRUPT_SEIP
     | INTERRUPT_MEIP;
 const SUPERVISOR_INTERRUPT_MASK: u64 = INTERRUPT_SSIP | INTERRUPT_STIP | INTERRUPT_SEIP;
-const MIP_WRITABLE: u64 = INTERRUPT_SSIP;
+const MIP_WRITABLE: u64 = INTERRUPT_SSIP | INTERRUPT_STIP | INTERRUPT_SEIP;
+const SUPERVISOR_SOFTWARE_INTERRUPT: u64 = 1;
+const SUPERVISOR_TIMER_INTERRUPT: u64 = 5;
+const SUPERVISOR_EXTERNAL_INTERRUPT: u64 = 9;
+const INTERRUPT_CAUSE_BIT: u64 = 1 << 63;
 const HPM_EVENT_BITS: u32 = 4;
 const HPM_EVENT_MASK: u64 = (1 << HPM_EVENT_BITS) - 1;
 pub(crate) const HPM_EVENT_INSTRUCTION: u8 = 1 << 0;
@@ -272,8 +276,13 @@ impl Csrs {
                 let delegated = self.mideleg & SUPERVISOR_INTERRUPT_MASK;
                 self.mie = (self.mie & !delegated) | (value & delegated);
             }
-            inst::CSR_MIP => self.mip = value & MIP_WRITABLE,
-            inst::CSR_SIP => self.mip = value & self.mideleg & MIP_WRITABLE,
+            inst::CSR_MIP => {
+                self.mip = (self.mip & !MIP_WRITABLE) | (value & MIP_WRITABLE);
+            }
+            inst::CSR_SIP => {
+                let mask = self.mideleg & MIP_WRITABLE;
+                self.mip = (self.mip & !mask) | (value & mask);
+            }
             inst::CSR_MEDELEG => self.medeleg = value & MEDELEG_WRITABLE,
             inst::CSR_MIDELEG => self.mideleg = value & SUPERVISOR_INTERRUPT_MASK,
             inst::CSR_MCOUNTEREN => self.mcounteren = value & COUNTER_ENABLE_MASK,
@@ -404,6 +413,22 @@ impl Csrs {
     /// Whether an exception from S or U mode is delegated to S mode.
     pub(crate) fn delegates_exception(self, cause: u8) -> bool {
         cause < u64::BITS as u8 && self.medeleg & exception_bit(cause) != 0
+    }
+
+    /// Highest-priority enabled delegated supervisor interrupt for the current
+    /// privilege mode.
+    pub(crate) fn pending_supervisor_interrupt(self, privilege: PrivilegeMode) -> Option<u64> {
+        if privilege == PrivilegeMode::Machine || self.mstatus & MSTATUS_SIE == 0 {
+            return None;
+        }
+        let pending = self.mip & self.mie & self.mideleg & SUPERVISOR_INTERRUPT_MASK;
+        [
+            (INTERRUPT_SEIP, SUPERVISOR_EXTERNAL_INTERRUPT),
+            (INTERRUPT_SSIP, SUPERVISOR_SOFTWARE_INTERRUPT),
+            (INTERRUPT_STIP, SUPERVISOR_TIMER_INTERRUPT),
+        ]
+        .into_iter()
+        .find_map(|(bit, cause)| (pending & bit != 0).then_some(INTERRUPT_CAUSE_BIT | cause))
     }
 
     /// Whether S-mode accesses to translation-control state are blocked.
@@ -698,6 +723,61 @@ mod tests {
         assert_eq!(csrs.read(inst::CSR_MIP), Some(0));
         assert!(csrs.write(inst::CSR_MIP, 1));
         assert_eq!(csrs.read(inst::CSR_MIP), Some(0));
+    }
+
+    #[test]
+    fn mip_and_sip_write_only_writable_pending_bits_and_preserve_the_rest() {
+        let mut csrs = Csrs::default();
+        let supervisor_pending = INTERRUPT_STIP | INTERRUPT_SEIP;
+        let machine_pending = INTERRUPT_MSIP | INTERRUPT_MTIP | INTERRUPT_MEIP;
+
+        assert!(csrs.write(inst::CSR_MIP, supervisor_pending));
+        assert_eq!(csrs.read(inst::CSR_MIP), Some(supervisor_pending));
+
+        csrs.mip |= machine_pending;
+        assert!(csrs.write(inst::CSR_MIDELEG, SUPERVISOR_INTERRUPT_MASK));
+        assert!(csrs.write_with_privilege(
+            inst::CSR_SIP,
+            INTERRUPT_STIP,
+            PrivilegeMode::Supervisor
+        ));
+        assert_eq!(
+            csrs.read(inst::CSR_MIP),
+            Some(INTERRUPT_STIP | machine_pending)
+        );
+
+        assert!(csrs.write(inst::CSR_MIP, INTERRUPT_STIP));
+        assert!(csrs.write(inst::CSR_MIDELEG, INTERRUPT_STIP));
+        assert!(csrs.write_with_privilege(
+            inst::CSR_SIP,
+            INTERRUPT_SSIP | INTERRUPT_STIP | INTERRUPT_SEIP,
+            PrivilegeMode::Supervisor
+        ));
+        assert_eq!(
+            csrs.read(inst::CSR_MIP),
+            Some(INTERRUPT_STIP | machine_pending)
+        );
+    }
+
+    #[test]
+    fn enabled_delegated_supervisor_interrupts_use_architectural_priority() {
+        let mut csrs = Csrs::default();
+        assert!(csrs.write(inst::CSR_MSTATUS, MSTATUS_SIE));
+        assert!(csrs.write(inst::CSR_MIDELEG, SUPERVISOR_INTERRUPT_MASK));
+        assert!(csrs.write(inst::CSR_MIE, SUPERVISOR_INTERRUPT_MASK));
+        assert!(csrs.write(
+            inst::CSR_MIP,
+            INTERRUPT_SSIP | INTERRUPT_STIP | INTERRUPT_SEIP
+        ));
+
+        assert_eq!(
+            csrs.pending_supervisor_interrupt(PrivilegeMode::Supervisor),
+            Some(INTERRUPT_CAUSE_BIT | SUPERVISOR_EXTERNAL_INTERRUPT)
+        );
+        assert_eq!(
+            csrs.pending_supervisor_interrupt(PrivilegeMode::Machine),
+            None
+        );
     }
 
     #[test]
