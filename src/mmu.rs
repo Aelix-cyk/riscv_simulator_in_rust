@@ -33,6 +33,7 @@ pub(crate) enum Access {
     Fetch,
     Load,
     Store,
+    CacheManagement,
 }
 
 /// Why translation could not produce a physical address.
@@ -237,6 +238,7 @@ fn permits(entry: TlbEntry, config: Config, access: Access) -> bool {
         Access::Fetch => entry.executable,
         Access::Load => entry.readable || config.mxr && entry.executable,
         Access::Store => entry.writable,
+        Access::CacheManagement => entry.readable || entry.writable,
     }
 }
 
@@ -446,6 +448,55 @@ mod tests {
             mmu.translate(&mut memory, config(ASID_ONE), TEST_OFFSET, Access::Load),
             Err(Fault {
                 access: Access::Load,
+                kind: FaultKind::Page
+            })
+        );
+    }
+
+    #[test]
+    fn cache_management_accepts_read_or_write_access_without_dirty() {
+        let mut memory = Memory::with_size(MEMORY_BYTES);
+        let mut mmu = Mmu::default();
+
+        install_4k_mapping(
+            &mut memory,
+            pte(DATA_PAGE, PTE_VALID | PTE_READ | PTE_ACCESSED),
+        );
+        assert_eq!(
+            mmu.translate(
+                &mut memory,
+                config(ASID_ONE),
+                TEST_VA,
+                Access::CacheManagement
+            ),
+            Ok(DATA_PAGE)
+        );
+        assert_eq!(
+            mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Store),
+            Err(Fault {
+                access: Access::Store,
+                kind: FaultKind::Page
+            })
+        );
+
+        install_4k_mapping(
+            &mut memory,
+            pte(DATA_PAGE, PTE_VALID | PTE_READ | PTE_WRITE | PTE_ACCESSED),
+        );
+        mmu.sfence_vma(None, None);
+        assert_eq!(
+            mmu.translate(
+                &mut memory,
+                config(ASID_ONE),
+                TEST_VA,
+                Access::CacheManagement
+            ),
+            Ok(DATA_PAGE)
+        );
+        assert_eq!(
+            mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Store),
+            Err(Fault {
+                access: Access::Store,
                 kind: FaultKind::Page
             })
         );

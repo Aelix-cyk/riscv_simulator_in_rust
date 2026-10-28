@@ -321,7 +321,11 @@ impl Csrs {
             inst::CSR_MHPMCOUNTER3..=inst::CSR_MHPMCOUNTER31 => {
                 self.write_mhpmcounter(address, value);
             }
-            inst::CSR_SATP => self.satp = Self::satp_value(value),
+            inst::CSR_SATP => {
+                if let Some(satp) = Self::satp_value(value) {
+                    self.satp = satp;
+                }
+            }
             _ => return false,
         }
         true
@@ -373,12 +377,12 @@ impl Csrs {
         }
     }
 
-    fn satp_value(value: u64) -> u64 {
+    fn satp_value(value: u64) -> Option<u64> {
         let mode = value & SATP_MODE_MASK;
         if mode != 0 && mode != SATP_SV39_MODE << SATP_MODE_SHIFT {
-            return 0;
+            return None;
         }
-        mode | (value & ((SATP_ASID_MASK << SATP_ASID_SHIFT) | SATP_PPN_MASK))
+        Some(mode | (value & ((SATP_ASID_MASK << SATP_ASID_SHIFT) | SATP_PPN_MASK)))
     }
 
     fn is_read_only(address: u16) -> bool {
@@ -907,8 +911,13 @@ mod tests {
 
         assert!(csrs.write(inst::CSR_SATP, satp));
         assert_eq!(csrs.read(inst::CSR_SATP), Some(satp));
-        assert!(csrs.write(inst::CSR_SATP, 1 << SATP_MODE_SHIFT));
-        assert_eq!(csrs.read(inst::CSR_SATP), Some(0));
+        for mode in (0_u64..=0xf).filter(|mode| *mode != 0 && *mode != SATP_SV39_MODE) {
+            assert!(csrs.write(
+                inst::CSR_SATP,
+                mode << SATP_MODE_SHIFT | 0xffff_ffff_ffff_ffff
+            ));
+            assert_eq!(csrs.read(inst::CSR_SATP), Some(satp), "mode {mode}");
+        }
     }
 
     #[test]

@@ -18,3 +18,6 @@
 | [0014 — direct execute records zero tval for system instructions](0014-direct-execute-tval-zero-for-system-instructions.md) | Fixed |
 | [0015 — supervisor fixture sets VS instead of SIE](0015-supervisor-fixture-sets-vs-instead-of-sie.md) | Fixed |
 | [0016 — unimplemented-opcode trap documentation ignores delegation](0016-unimplemented-opcode-trap-doc-stale.md) | Fixed |
+| [0017 — unsupported satp MODE writes clear translation state](0017-satp-unsupported-mode-clears-translation.md) | Fixed |
+| [0018 — CBO management uses store permission checks](0018-cbo-management-uses-store-permission-check.md) | Fixed |
+| [0019 — CBO faults report the block base instead of rs1](0019-cbo-fault-address-uses-block-base.md) | Fixed |

@@ -1606,7 +1606,7 @@ impl<B: Bus> Machine<B> {
         self.require_cache_block_access(access, word)?;
         let address = self.gpr(rs1);
         let block = address & CACHE_BLOCK_ALIGNMENT_MASK;
-        self.bus_check_write(block, CACHE_BLOCK_BYTES, Access::Store, address)
+        self.bus_check_write(block, CACHE_BLOCK_BYTES, Access::CacheManagement, address)
     }
 
     /// Executes cache-block zero after checking the complete block.
@@ -1682,9 +1682,11 @@ impl<B: Bus> Machine<B> {
                     (FaultKind::Page, Access::Fetch) => inst::CAUSE_FETCH_PAGE_FAULT,
                     (FaultKind::Page, Access::Load) => inst::CAUSE_LOAD_PAGE_FAULT,
                     (FaultKind::Page, Access::Store) => inst::CAUSE_STORE_PAGE_FAULT,
+                    (FaultKind::Page, Access::CacheManagement) => inst::CAUSE_STORE_PAGE_FAULT,
                     (FaultKind::Access, Access::Fetch) => inst::CAUSE_FETCH_ACCESS,
                     (FaultKind::Access, Access::Load) => inst::CAUSE_LOAD_ACCESS,
                     (FaultKind::Access, Access::Store) => inst::CAUSE_STORE_ACCESS,
+                    (FaultKind::Access, Access::CacheManagement) => inst::CAUSE_STORE_ACCESS,
                 };
                 Exception::new(cause, address)
             })
@@ -1710,6 +1712,7 @@ impl<B: Bus> Machine<B> {
             Access::Fetch => inst::CAUSE_FETCH_ACCESS,
             Access::Load => inst::CAUSE_LOAD_ACCESS,
             Access::Store => inst::CAUSE_STORE_ACCESS,
+            Access::CacheManagement => inst::CAUSE_STORE_ACCESS,
         };
         Exception::new(cause, address)
     }
@@ -1812,8 +1815,10 @@ impl<B: Bus> Machine<B> {
         for offset in 0..width {
             let virtual_address = address
                 .checked_add(offset)
-                .ok_or_else(|| self.access_exception(access, address))?;
-            let physical = self.translate_address(virtual_address, access)?;
+                .ok_or_else(|| self.access_exception(access, fault_address))?;
+            let physical = self
+                .translate_address(virtual_address, access)
+                .map_err(|exception| Exception::new(exception.cause, fault_address))?;
             self.bus
                 .check_write(physical, 1)
                 .map_err(|_| self.access_exception(access, fault_address))?;
@@ -2157,6 +2162,7 @@ mod tests {
     const MSTATUS_SPIE_BIT: u64 = 1 << 5;
     const MSTATUS_SPP_BIT: u64 = 1 << 8;
     const MSTATUS_MPP_SUPERVISOR: u64 = 1 << 11;
+    const MSTATUS_MPRV_BIT: u64 = 1 << 17;
     const MSTATUS_TVM_BIT: u64 = 1 << 20;
     const MSTATUS_TW_BIT: u64 = 1 << 21;
     const MSTATUS_TSR_BIT: u64 = 1 << 22;
@@ -4718,6 +4724,60 @@ mod tests {
             Some(0),
             "enabled U-mode CBO operations must retire without trapping"
         );
+    }
+
+    #[test]
+    fn cache_block_translation_faults_report_the_original_rs1_address() {
+        const CBO_ADDRESS: u64 = 0x4000_0010;
+        const SATP_SV39_MODE: u64 = 8;
+        const SATP_MODE_SHIFT: u32 = 60;
+
+        for instruction in [
+            Instruction::CboClean { rs1: 1 },
+            Instruction::CboFlush { rs1: 1 },
+            Instruction::CboInval { rs1: 1 },
+            Instruction::CboZero { rs1: 1 },
+        ] {
+            let mut machine = Machine::new(Memory::with_size(0x2000));
+            assert!(machine.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+            let satp = SATP_SV39_MODE << SATP_MODE_SHIFT | (DRAM_BASE >> 12);
+            assert!(machine.cpu_mut().write_csr(inst::CSR_SATP, satp));
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MSTATUS, MSTATUS_MPRV_BIT | MSTATUS_MPP_SUPERVISOR)
+            );
+            machine.cpu_mut().write_gpr(1, CBO_ADDRESS);
+
+            machine.execute(instruction);
+
+            assert_trap(&machine, inst::CAUSE_STORE_PAGE_FAULT, CBO_ADDRESS, 0);
+        }
+
+        let mut delegated = Machine::new(Memory::with_size(0x2000));
+        assert!(delegated.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+        assert!(
+            delegated
+                .cpu_mut()
+                .write_csr(inst::CSR_STVEC, SUPERVISOR_HANDLER)
+        );
+        assert!(
+            delegated
+                .cpu_mut()
+                .write_csr(inst::CSR_MEDELEG, 1 << inst::CAUSE_STORE_PAGE_FAULT)
+        );
+        assert!(delegated.cpu_mut().write_csr(
+            inst::CSR_MENVCFG,
+            MENVCFG_CBIE_FLUSH | MENVCFG_CBCFE | MENVCFG_CBZE
+        ));
+        let satp = SATP_SV39_MODE << SATP_MODE_SHIFT | (DRAM_BASE >> 12);
+        assert!(delegated.cpu_mut().write_csr(inst::CSR_SATP, satp));
+        delegated.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+        delegated.cpu_mut().write_gpr(1, CBO_ADDRESS);
+
+        delegated.execute(Instruction::CboFlush { rs1: 1 });
+
+        assert_supervisor_trap(&delegated, inst::CAUSE_STORE_PAGE_FAULT, CBO_ADDRESS, 0);
     }
 
     #[test]
