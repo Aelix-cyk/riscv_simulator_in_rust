@@ -392,6 +392,10 @@ pub enum Instruction {
     Bexti { rd: u8, rs1: u8, shamt: u8 },
 
     // F-extension memory and arithmetic operations.
+    /// `flh rd, offset(rs1)`
+    Flh { rd: u8, rs1: u8, offset: i64 },
+    /// `fsh rs2, offset(rs1)`
+    Fsh { rs2: u8, rs1: u8, offset: i64 },
     /// `flw rd, offset(rs1)`
     Flw { rd: u8, rs1: u8, offset: i64 },
     /// `fsw rs2, offset(rs1)`
@@ -765,6 +769,7 @@ pub enum Instruction {
 /// Floating-point operand format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FpFormat {
+    Half,
     Single,
     Double,
 }
@@ -1738,11 +1743,22 @@ impl Instruction {
             Instruction::Binvi { .. } => "binvi",
             Instruction::Bext { .. } => "bext",
             Instruction::Bexti { .. } => "bexti",
+            Instruction::Flh { .. } => "flh",
+            Instruction::Fsh { .. } => "fsh",
             Instruction::Flw { .. } => "flw",
             Instruction::Fsw { .. } => "fsw",
             Instruction::Fld { .. } => "fld",
             Instruction::Fsd { .. } => "fsd",
             Instruction::FpBinary { op, format, .. } => match (op, format) {
+                (FpBinaryOp::Add, FpFormat::Half) => "fadd.h",
+                (FpBinaryOp::Sub, FpFormat::Half) => "fsub.h",
+                (FpBinaryOp::Mul, FpFormat::Half) => "fmul.h",
+                (FpBinaryOp::Div, FpFormat::Half) => "fdiv.h",
+                (FpBinaryOp::SignInject, FpFormat::Half) => "fsgnj.h",
+                (FpBinaryOp::SignInjectNegated, FpFormat::Half) => "fsgnjn.h",
+                (FpBinaryOp::SignInjectXor, FpFormat::Half) => "fsgnjx.h",
+                (FpBinaryOp::Min, FpFormat::Half) => "fmin.h",
+                (FpBinaryOp::Max, FpFormat::Half) => "fmax.h",
                 (FpBinaryOp::Add, FpFormat::Single) => "fadd.s",
                 (FpBinaryOp::Sub, FpFormat::Single) => "fsub.s",
                 (FpBinaryOp::Mul, FpFormat::Single) => "fmul.s",
@@ -1763,10 +1779,15 @@ impl Instruction {
                 (FpBinaryOp::Max, FpFormat::Double) => "fmax.d",
             },
             Instruction::FpSqrt { format, .. } => match format {
+                FpFormat::Half => "fsqrt.h",
                 FpFormat::Single => "fsqrt.s",
                 FpFormat::Double => "fsqrt.d",
             },
             Instruction::FpFused { op, format, .. } => match (op, format) {
+                (FpFusedOp::Madd, FpFormat::Half) => "fmadd.h",
+                (FpFusedOp::Msub, FpFormat::Half) => "fmsub.h",
+                (FpFusedOp::Nmsub, FpFormat::Half) => "fnmsub.h",
+                (FpFusedOp::Nmadd, FpFormat::Half) => "fnmadd.h",
                 (FpFusedOp::Madd, FpFormat::Single) => "fmadd.s",
                 (FpFusedOp::Msub, FpFormat::Single) => "fmsub.s",
                 (FpFusedOp::Nmsub, FpFormat::Single) => "fnmsub.s",
@@ -1777,6 +1798,9 @@ impl Instruction {
                 (FpFusedOp::Nmadd, FpFormat::Double) => "fnmadd.d",
             },
             Instruction::FpCompare { op, format, .. } => match (op, format) {
+                (FpCompareOp::Equal, FpFormat::Half) => "feq.h",
+                (FpCompareOp::Less, FpFormat::Half) => "flt.h",
+                (FpCompareOp::LessEqual, FpFormat::Half) => "fle.h",
                 (FpCompareOp::Equal, FpFormat::Single) => "feq.s",
                 (FpCompareOp::Less, FpFormat::Single) => "flt.s",
                 (FpCompareOp::LessEqual, FpFormat::Single) => "fle.s",
@@ -1785,6 +1809,7 @@ impl Instruction {
                 (FpCompareOp::LessEqual, FpFormat::Double) => "fle.d",
             },
             Instruction::FpClass { format, .. } => match format {
+                FpFormat::Half => "fclass.h",
                 FpFormat::Single => "fclass.s",
                 FpFormat::Double => "fclass.d",
             },
@@ -1801,15 +1826,21 @@ impl Instruction {
                 ..
             } => from_int_mnemonic(format, width, unsigned),
             Instruction::FpConvert { from, to, .. } => match (from, to) {
+                (FpFormat::Half, FpFormat::Single) => "fcvt.s.h",
+                (FpFormat::Half, FpFormat::Double) => "fcvt.d.h",
+                (FpFormat::Single, FpFormat::Half) => "fcvt.h.s",
+                (FpFormat::Double, FpFormat::Half) => "fcvt.h.d",
                 (FpFormat::Double, FpFormat::Single) => "fcvt.s.d",
                 (FpFormat::Single, FpFormat::Double) => "fcvt.d.s",
                 _ => unreachable!("format conversion changes precision"),
             },
             Instruction::FpMoveToInt { format, .. } => match format {
+                FpFormat::Half => "fmv.x.h",
                 FpFormat::Single => "fmv.x.w",
                 FpFormat::Double => "fmv.x.d",
             },
             Instruction::FpMoveFromInt { format, .. } => match format {
+                FpFormat::Half => "fmv.h.x",
                 FpFormat::Single => "fmv.w.x",
                 FpFormat::Double => "fmv.d.x",
             },
@@ -1963,6 +1994,8 @@ impl Instruction {
             Instruction::Binvi { rd, rs1, shamt } => shamt_op("binvi", rd, rs1, shamt),
             Instruction::Bext { rd, rs1, rs2 } => reg_op("bext", rd, rs1, rs2),
             Instruction::Bexti { rd, rs1, shamt } => shamt_op("bexti", rd, rs1, shamt),
+            Instruction::Flh { rd, rs1, offset } => fp_load_op("flh", rd, rs1, offset),
+            Instruction::Fsh { rs2, rs1, offset } => fp_store_op("fsh", rs2, rs1, offset),
             Instruction::Flw { rd, rs1, offset } => fp_load_op("flw", rd, rs1, offset),
             Instruction::Fsw { rs2, rs1, offset } => fp_store_op("fsw", rs2, rs1, offset),
             Instruction::Fld { rd, rs1, offset } => fp_load_op("fld", rd, rs1, offset),
@@ -2078,7 +2111,7 @@ impl Instruction {
                 format_suffix(from).trim_start_matches('.'),
                 fpr_abi_name(rd),
                 fpr_abi_name(rs1),
-                if from == FpFormat::Single && to == FpFormat::Double {
+                if is_widening_fp_conversion(from, to) {
                     ""
                 } else {
                     rounding_suffix(rounding)
@@ -2355,6 +2388,15 @@ fn cache_block_op(mnemonic: &str, rs1: u8) -> String {
 
 fn fp_binary_mnemonic(op: FpBinaryOp, format: FpFormat) -> &'static str {
     match (op, format) {
+        (FpBinaryOp::Add, FpFormat::Half) => "fadd.h",
+        (FpBinaryOp::Sub, FpFormat::Half) => "fsub.h",
+        (FpBinaryOp::Mul, FpFormat::Half) => "fmul.h",
+        (FpBinaryOp::Div, FpFormat::Half) => "fdiv.h",
+        (FpBinaryOp::SignInject, FpFormat::Half) => "fsgnj.h",
+        (FpBinaryOp::SignInjectNegated, FpFormat::Half) => "fsgnjn.h",
+        (FpBinaryOp::SignInjectXor, FpFormat::Half) => "fsgnjx.h",
+        (FpBinaryOp::Min, FpFormat::Half) => "fmin.h",
+        (FpBinaryOp::Max, FpFormat::Half) => "fmax.h",
         (FpBinaryOp::Add, FpFormat::Single) => "fadd.s",
         (FpBinaryOp::Sub, FpFormat::Single) => "fsub.s",
         (FpBinaryOp::Mul, FpFormat::Single) => "fmul.s",
@@ -2402,6 +2444,10 @@ fn rounding_suffix(rounding: u8) -> &'static str {
 
 fn fp_fused_mnemonic(op: FpFusedOp, format: FpFormat) -> &'static str {
     match (op, format) {
+        (FpFusedOp::Madd, FpFormat::Half) => "fmadd.h",
+        (FpFusedOp::Msub, FpFormat::Half) => "fmsub.h",
+        (FpFusedOp::Nmsub, FpFormat::Half) => "fnmsub.h",
+        (FpFusedOp::Nmadd, FpFormat::Half) => "fnmadd.h",
         (FpFusedOp::Madd, FpFormat::Single) => "fmadd.s",
         (FpFusedOp::Msub, FpFormat::Single) => "fmsub.s",
         (FpFusedOp::Nmsub, FpFormat::Single) => "fnmsub.s",
@@ -2415,6 +2461,9 @@ fn fp_fused_mnemonic(op: FpFusedOp, format: FpFormat) -> &'static str {
 
 fn fp_compare_mnemonic(op: FpCompareOp, format: FpFormat) -> &'static str {
     match (op, format) {
+        (FpCompareOp::Equal, FpFormat::Half) => "feq.h",
+        (FpCompareOp::Less, FpFormat::Half) => "flt.h",
+        (FpCompareOp::LessEqual, FpFormat::Half) => "fle.h",
         (FpCompareOp::Equal, FpFormat::Single) => "feq.s",
         (FpCompareOp::Less, FpFormat::Single) => "flt.s",
         (FpCompareOp::LessEqual, FpFormat::Single) => "fle.s",
@@ -2426,6 +2475,10 @@ fn fp_compare_mnemonic(op: FpCompareOp, format: FpFormat) -> &'static str {
 
 fn to_int_mnemonic(format: FpFormat, width: u32, unsigned: bool) -> &'static str {
     match (format, width, unsigned) {
+        (FpFormat::Half, WORD_BITS, false) => "fcvt.w.h",
+        (FpFormat::Half, WORD_BITS, true) => "fcvt.wu.h",
+        (FpFormat::Half, XLEN, false) => "fcvt.l.h",
+        (FpFormat::Half, XLEN, true) => "fcvt.lu.h",
         (FpFormat::Single, WORD_BITS, false) => "fcvt.w.s",
         (FpFormat::Single, WORD_BITS, true) => "fcvt.wu.s",
         (FpFormat::Single, XLEN, false) => "fcvt.l.s",
@@ -2440,6 +2493,10 @@ fn to_int_mnemonic(format: FpFormat, width: u32, unsigned: bool) -> &'static str
 
 fn from_int_mnemonic(format: FpFormat, width: u32, unsigned: bool) -> &'static str {
     match (format, width, unsigned) {
+        (FpFormat::Half, WORD_BITS, false) => "fcvt.h.w",
+        (FpFormat::Half, WORD_BITS, true) => "fcvt.h.wu",
+        (FpFormat::Half, XLEN, false) => "fcvt.h.l",
+        (FpFormat::Half, XLEN, true) => "fcvt.h.lu",
         (FpFormat::Single, WORD_BITS, false) => "fcvt.s.w",
         (FpFormat::Single, WORD_BITS, true) => "fcvt.s.wu",
         (FpFormat::Single, XLEN, false) => "fcvt.s.l",
@@ -2454,6 +2511,7 @@ fn from_int_mnemonic(format: FpFormat, width: u32, unsigned: bool) -> &'static s
 
 fn format_suffix(format: FpFormat) -> &'static str {
     match format {
+        FpFormat::Half => ".h",
         FpFormat::Single => ".s",
         FpFormat::Double => ".d",
     }
@@ -2461,9 +2519,19 @@ fn format_suffix(format: FpFormat) -> &'static str {
 
 fn move_suffix(format: FpFormat) -> &'static str {
     match format {
+        FpFormat::Half => "h",
         FpFormat::Single => "w",
         FpFormat::Double => "d",
     }
+}
+
+fn is_widening_fp_conversion(from: FpFormat, to: FpFormat) -> bool {
+    matches!(
+        (from, to),
+        (FpFormat::Half, FpFormat::Single)
+            | (FpFormat::Half, FpFormat::Double)
+            | (FpFormat::Single, FpFormat::Double)
+    )
 }
 
 /// `mnemonic fd,offset(rs1)`

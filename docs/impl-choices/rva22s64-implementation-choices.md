@@ -39,7 +39,7 @@ mandatory here by reference, so these rows gate conformance too.
 | RVA22U64 | Zicbom — cache-block management operations | Implemented | Full-block check, then cacheless no-op |
 | RVA22U64 | Zicbop — cache-block prefetch operations | Implemented | Untrapping hints; no cache effect |
 | RVA22U64 | Zicboz — cache-block zero operations | Implemented | Preflight then clear the containing block |
-| RVA22U64 | Zfhmin — half-precision transfer and convert | Fixed | |
+| RVA22U64 | Zfhmin — half-precision transfer and convert | Implemented | Full Zfh also implemented |
 | RVA22U64 | Zkt — data-independent execution time | Fixed | |
 
 ### 1.2 Added by RVA22S64
@@ -63,7 +63,7 @@ mandatory here by reference, so these rows gate conformance too.
 
 | Clause | Option | Status | Notes |
 |---|---|---|---|
-| RVA22U64 option | Zfh | Undecided | |
+| RVA22U64 option | Zfh | Implemented | Half arithmetic, comparisons, classification, and conversions |
 | RVA22U64 option | V | Undecided | |
 | RVA22U64 option | Zkn | Undecided | |
 | RVA22U64 option | Zks | Undecided | |

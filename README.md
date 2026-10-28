@@ -8,7 +8,7 @@ A 64-bit hart that executes RV64IMAFDCB with M/U privilege plus Zicsr and Zicntr
 the integer ALU operations, all integer multiply/divide and atomic instructions,
 the Zba/Zbb/Zbs bit-manipulation instructions,
 64-byte cache-block management, zero, and prefetch operations, `pause`,
-single- and double-precision floating point, Zca/Zcd compressed instructions,
+single-, double-, and half-precision floating point, Zca/Zcd compressed instructions,
 branches, jumps, loads and stores,
 `fence`/`fence.i`, the six CSR read/modify/write forms, and deterministic cycle,
 time, instruction, and three event-selectable hardware performance counters.
@@ -43,7 +43,7 @@ its loadable bytes. Fixtures use `tests/fixtures/link.ld`, which places the imag
 `DRAM_BASE` with no leading gap:
 
 ```sh
-$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64imafc_zifencei_zicsr_zicntr -mabi=lp64 -nostdlib \
+$RISCV/bin/riscv64-unknown-elf-gcc -march=rv64imafc_zfh_zicsr_zicntr_zifencei -mabi=lp64 -nostdlib \
     -I tests/fixtures -Wl,-T,tests/fixtures/link.ld \
     -o /tmp/loop.elf tests/fixtures/loop.S
 $RISCV/bin/riscv64-unknown-elf-objcopy -O binary /tmp/loop.elf /tmp/loop.bin
@@ -81,8 +81,8 @@ unsupported features and deferred bugs live in
 `tests/compliance/expected_failures.tsv`; listed passes or unlisted failures
 fail the gate. The legacy gate includes `rv64ui`, `rv64um`, `rv64ua`, `rv64uc`,
 the three B families (`rv64uzba`, `rv64uzbb`, `rv64uzbs`), `rv64mi`, `rv64uf`,
-and `rv64ud`; the ACT4 configuration covers B bit manipulation plus F/D
-arithmetic, flags, rounding, conversions, and transfer instructions.
+`rv64ud`, and `rv64uzfh`; the ACT4 configuration covers B bit manipulation plus
+F/D/H arithmetic, flags, rounding, conversions, and transfer instructions.
 
 In this development environment, `uv` is not directly on the project `PATH`.
 It is provided through `mise` from the external architecture-test checkout:

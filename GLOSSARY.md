@@ -68,6 +68,8 @@ category and listed alphabetically within each section.
 - **M extension** — Integer multiply and divide instructions.
 - **MUL / MULH / DIV / REM** — Integer multiplication (low and high halves), division, and remainder, plus unsigned variants.
 - **Rounding mode** — The field selecting how a floating-point result is rounded, e.g. round-to-nearest-even.
+- **Zfh** — Half-precision (16-bit) IEEE-754 floating-point arithmetic, comparisons, conversions, and transfers.
+- **Zfhmin** — The minimal half-precision subset: loads, stores, conversions, and integer-register moves.
 
 ## Privileged Architecture & CSRs
 

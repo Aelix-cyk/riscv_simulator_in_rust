@@ -8,6 +8,7 @@ use crate::decode::{
     is_compressed,
 };
 use crate::fp::{self, RoundingMode};
+use crate::fp16;
 use crate::fp64;
 use crate::inst;
 use crate::trap::Trap;
@@ -20,9 +21,11 @@ const DOUBLEWORD_BYTES: u64 = 8;
 const RESERVATION_BYTES: u64 = DOUBLEWORD_BYTES;
 const RESERVATION_ALIGNMENT_MASK: u64 = !(RESERVATION_BYTES - 1);
 const WORD_BITS: u32 = 32;
+const HALF_BITS: u32 = 16;
 const DYNAMIC_ROUNDING: u8 = 7;
 const FLOAT_BITS_MASK: u64 = (1 << WORD_BITS) - 1;
 const NAN_BOX: u64 = FLOAT_BITS_MASK << WORD_BITS;
+const HALF_NAN_BOX: u64 = u64::MAX << HALF_BITS;
 const BYTE_BITS: u32 = 8;
 const BYTE_MASK: u64 = u8::MAX as u64;
 const SHIFT_ONE: u32 = 1;
@@ -546,6 +549,24 @@ impl<B: Bus> Machine<B> {
             Instruction::Bexti { rd, rs1, shamt } => {
                 self.write(rd, (self.gpr(rs1) >> shamt) & 1);
             }
+            Instruction::Flh { rd, rs1, offset } => {
+                self.require_fp_enabled(word)?;
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self
+                    .bus
+                    .read_u16(address)
+                    .map_err(|_| Exception::new(inst::CAUSE_LOAD_ACCESS, address))?;
+                self.write_f16(rd, value);
+            }
+            Instruction::Fsh { rs2, rs1, offset } => {
+                self.require_fp_enabled(word)?;
+                let address = self.gpr(rs1).wrapping_add_signed(offset);
+                let value = self.read_fpr(rs2) as u16;
+                self.bus
+                    .write_u16(address, value)
+                    .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+                self.invalidate_reservation(address, 2);
+            }
             Instruction::Flw { rd, rs1, offset } => {
                 self.require_fp_enabled(word)?;
                 let address = self.gpr(rs1).wrapping_add_signed(offset);
@@ -676,6 +697,7 @@ impl<B: Bus> Machine<B> {
             Instruction::FpMoveToInt { format, rd, rs1 } => {
                 self.require_fp_enabled(word)?;
                 let value = match format {
+                    FpFormat::Half => sign_extend_16(self.read_fpr(rs1)),
                     FpFormat::Single => sign_extend_32(self.read_fpr(rs1)),
                     FpFormat::Double => self.read_fpr(rs1),
                 };
@@ -684,6 +706,7 @@ impl<B: Bus> Machine<B> {
             Instruction::FpMoveFromInt { format, rd, rs1 } => {
                 self.require_fp_enabled(word)?;
                 match format {
+                    FpFormat::Half => self.write_f16(rd, self.gpr(rs1) as u16),
                     FpFormat::Single => self.write_f32(rd, self.gpr(rs1) as u32),
                     FpFormat::Double => self.write_f64(rd, self.gpr(rs1)),
                 }
@@ -1231,6 +1254,18 @@ impl<B: Bus> Machine<B> {
             FpBinaryOp::Add | FpBinaryOp::Sub | FpBinaryOp::Mul | FpBinaryOp::Div => {
                 let mode = self.rounding_mode(rounding, word)?;
                 match format {
+                    FpFormat::Half => {
+                        let a = a as u16;
+                        let b = b as u16;
+                        let result = match op {
+                            FpBinaryOp::Add => fp16::add(a, b, mode),
+                            FpBinaryOp::Sub => fp16::sub(a, b, mode),
+                            FpBinaryOp::Mul => fp16::mul(a, b, mode),
+                            FpBinaryOp::Div => fp16::div(a, b, mode),
+                            _ => unreachable!(),
+                        };
+                        self.write_fp16_result(rd, result);
+                    }
                     FpFormat::Single => {
                         let a = a as u32;
                         let b = b as u32;
@@ -1261,6 +1296,30 @@ impl<B: Bus> Machine<B> {
             | FpBinaryOp::Min
             | FpBinaryOp::Max => {
                 let (bits, flags) = match format {
+                    FpFormat::Half => {
+                        let a = a as u16;
+                        let b = b as u16;
+                        let sign_mask = format_sign_mask(format) as u16;
+                        let (bits, flags) = match op {
+                            FpBinaryOp::SignInject => ((a & !sign_mask) | (b & sign_mask), 0),
+                            FpBinaryOp::SignInjectNegated => {
+                                ((a & !sign_mask) | ((b ^ sign_mask) & sign_mask), 0)
+                            }
+                            FpBinaryOp::SignInjectXor => {
+                                ((a & !sign_mask) | ((a ^ b) & sign_mask), 0)
+                            }
+                            FpBinaryOp::Min => {
+                                let result = fp16::min(a, b);
+                                (result.bits, result.flags)
+                            }
+                            FpBinaryOp::Max => {
+                                let result = fp16::max(a, b);
+                                (result.bits, result.flags)
+                            }
+                            _ => unreachable!(),
+                        };
+                        (u64::from(bits), flags)
+                    }
                     FpFormat::Single => {
                         let a = a as u32;
                         let b = b as u32;
@@ -1325,6 +1384,10 @@ impl<B: Bus> Machine<B> {
         self.require_fp_enabled(word)?;
         let mode = self.rounding_mode(rounding, word)?;
         match format {
+            FpFormat::Half => {
+                let result = fp16::sqrt(self.read_f16(rs1), mode);
+                self.write_fp16_result(rd, result);
+            }
             FpFormat::Single => {
                 let result = fp::sqrt(self.read_f32(rs1), mode);
                 self.write_fp_result(rd, result);
@@ -1352,6 +1415,17 @@ impl<B: Bus> Machine<B> {
         let mode = self.rounding_mode(rounding, word)?;
         let (negate_product, negate_addend) = fused_signs(op);
         match format {
+            FpFormat::Half => {
+                let result = fp16::fma(
+                    self.read_f16(rs1),
+                    self.read_f16(rs2),
+                    self.read_f16(rs3),
+                    mode,
+                    negate_product,
+                    negate_addend,
+                );
+                self.write_fp16_result(rd, result);
+            }
             FpFormat::Single => {
                 let result = fp::fma(
                     self.read_f32(rs1),
@@ -1389,6 +1463,14 @@ impl<B: Bus> Machine<B> {
     ) -> Result<(), Exception> {
         self.require_fp_enabled(word)?;
         let (result, flags) = match format {
+            FpFormat::Half => {
+                let comparison = match op {
+                    FpCompareOp::Equal => fp16::Compare::Equal,
+                    FpCompareOp::Less => fp16::Compare::Less,
+                    FpCompareOp::LessEqual => fp16::Compare::LessEqual,
+                };
+                fp16::compare(self.read_f16(rs1), self.read_f16(rs2), comparison)
+            }
             FpFormat::Single => {
                 let comparison = match op {
                     FpCompareOp::Equal => fp::Compare::Equal,
@@ -1420,6 +1502,7 @@ impl<B: Bus> Machine<B> {
     ) -> Result<(), Exception> {
         self.require_fp_enabled(word)?;
         let class = match format {
+            FpFormat::Half => u64::from(fp16::classify_bits(self.read_f16(rs1))),
             FpFormat::Single => u64::from(fp::classify_bits(self.read_f32(rs1))),
             FpFormat::Double => fp64::classify_bits(self.read_f64(rs1)),
         };
@@ -1439,12 +1522,22 @@ impl<B: Bus> Machine<B> {
         } = request;
         self.require_fp_enabled(word)?;
         let mode = self.rounding_mode(rounding, word)?;
-        let result = match format {
-            FpFormat::Single => fp::to_int(self.read_f32(rs1), width, unsigned, mode),
-            FpFormat::Double => fp64::to_int(self.read_f64(rs1), width, unsigned, mode),
+        let (value, flags) = match format {
+            FpFormat::Half => {
+                let result = fp16::to_int(self.read_f16(rs1), width, unsigned, mode);
+                (result.value, result.flags)
+            }
+            FpFormat::Single => {
+                let result = fp::to_int(self.read_f32(rs1), width, unsigned, mode);
+                (result.value, result.flags)
+            }
+            FpFormat::Double => {
+                let result = fp64::to_int(self.read_f64(rs1), width, unsigned, mode);
+                (result.value, result.flags)
+            }
         };
-        self.write_fp_flags(result.flags);
-        self.write(rd, result.value);
+        self.write_fp_flags(flags);
+        self.write(rd, value);
         Ok(())
     }
 
@@ -1461,6 +1554,10 @@ impl<B: Bus> Machine<B> {
         self.require_fp_enabled(word)?;
         let mode = self.rounding_mode(rounding, word)?;
         match format {
+            FpFormat::Half => {
+                let result = fp16::from_int(self.gpr(rs1), width, unsigned, mode);
+                self.write_fp16_result(rd, result);
+            }
             FpFormat::Single => {
                 let result = fp::from_int(self.gpr(rs1), width, unsigned, mode);
                 self.write_fp_result(rd, result);
@@ -1483,13 +1580,31 @@ impl<B: Bus> Machine<B> {
         word: u32,
     ) -> Result<(), Exception> {
         self.require_fp_enabled(word)?;
-        let mode = self.rounding_mode(rounding, word)?;
         match (from, to) {
+            (FpFormat::Half, FpFormat::Single) => {
+                let result = fp16::to_single(self.read_f16(rs1));
+                self.write_fp_result(rd, result);
+            }
+            (FpFormat::Half, FpFormat::Double) => {
+                let result = fp16::to_double(self.read_f16(rs1));
+                self.write_fp64_result(rd, result);
+            }
             (FpFormat::Single, FpFormat::Double) => {
                 let result = fp64::from_single(self.read_f32(rs1));
                 self.write_fp64_result(rd, result);
             }
+            (FpFormat::Single, FpFormat::Half) => {
+                let mode = self.rounding_mode(rounding, word)?;
+                let result = fp16::from_single(self.read_f32(rs1), mode);
+                self.write_fp16_result(rd, result);
+            }
+            (FpFormat::Double, FpFormat::Half) => {
+                let mode = self.rounding_mode(rounding, word)?;
+                let result = fp16::from_double(self.read_f64(rs1), mode);
+                self.write_fp16_result(rd, result);
+            }
             (FpFormat::Double, FpFormat::Single) => {
+                let mode = self.rounding_mode(rounding, word)?;
                 let result = fp64::to_single(self.read_f64(rs1), mode);
                 self.write_fp_result(rd, result);
             }
@@ -1576,6 +1691,17 @@ impl<B: Bus> Machine<B> {
         }
     }
 
+    /// Reads a half-precision operand, converting an unboxed value to the
+    /// canonical NaN.
+    fn read_f16(&self, index: u8) -> u16 {
+        let value = self.read_fpr(index);
+        if value >> HALF_BITS == HALF_NAN_BOX >> HALF_BITS {
+            value as u16
+        } else {
+            fp16::CANONICAL_NAN
+        }
+    }
+
     /// Reads a double-precision operand from an FPR.
     fn read_f64(&self, index: u8) -> u64 {
         self.read_fpr(index)
@@ -1583,6 +1709,7 @@ impl<B: Bus> Machine<B> {
 
     fn read_fp(&self, format: FpFormat, index: u8) -> u64 {
         match format {
+            FpFormat::Half => u64::from(self.read_f16(index)),
             FpFormat::Single => u64::from(self.read_f32(index)),
             FpFormat::Double => self.read_f64(index),
         }
@@ -1599,6 +1726,12 @@ impl<B: Bus> Machine<B> {
             .write_fpr(usize::from(index), NAN_BOX | u64::from(value));
     }
 
+    /// Writes a half-precision value with architectural NaN boxing.
+    fn write_f16(&mut self, index: u8, value: u16) {
+        self.cpu
+            .write_fpr(usize::from(index), HALF_NAN_BOX | u64::from(value));
+    }
+
     /// Writes a double-precision value as architectural bits.
     fn write_f64(&mut self, index: u8, value: u64) {
         self.cpu.write_fpr(usize::from(index), value);
@@ -1606,6 +1739,7 @@ impl<B: Bus> Machine<B> {
 
     fn write_fp_bits(&mut self, index: u8, format: FpFormat, bits: u64) {
         match format {
+            FpFormat::Half => self.write_f16(index, bits as u16),
             FpFormat::Single => self.write_f32(index, bits as u32),
             FpFormat::Double => self.write_f64(index, bits),
         }
@@ -1614,6 +1748,12 @@ impl<B: Bus> Machine<B> {
     /// Writes a result to an FPR and accumulates any raised flags.
     fn write_fp_result(&mut self, index: u8, result: fp::FpResult) {
         self.write_f32(index, result.bits);
+        self.write_fp_flags(result.flags);
+    }
+
+    /// Writes a half-precision result and accumulates raised flags.
+    fn write_fp16_result(&mut self, index: u8, result: fp16::FpResult) {
+        self.write_f16(index, result.bits);
         self.write_fp_flags(result.flags);
     }
 
@@ -1662,6 +1802,7 @@ impl<B: Bus> Machine<B> {
 
 fn format_sign_mask(format: FpFormat) -> u64 {
     match format {
+        FpFormat::Half => u64::from(fp16::SIGN_MASK),
         FpFormat::Single => u64::from(fp::SIGN_MASK),
         FpFormat::Double => fp64::SIGN_MASK,
     }
@@ -1751,6 +1892,11 @@ fn sign_extend_32(value: u64) -> u64 {
     i64::from(value as u32 as i32) as u64
 }
 
+/// Sign-extends the low 16 bits of `value` to 64 bits.
+fn sign_extend_16(value: u64) -> u64 {
+    i64::from(value as u16 as i16) as u64
+}
+
 /// Shift amount of the 64-bit shifts, taken from the low six bits.
 fn shift_64(value: u64) -> u32 {
     (value & 0x3f) as u32
@@ -1773,6 +1919,7 @@ fn retirement_events(instruction: Instruction) -> u8 {
             | Instruction::Lbu { .. }
             | Instruction::Lhu { .. }
             | Instruction::Lwu { .. }
+            | Instruction::Flh { .. }
             | Instruction::Flw { .. }
             | Instruction::Fld { .. }
             | Instruction::LrW { .. }
@@ -1786,6 +1933,7 @@ fn retirement_events(instruction: Instruction) -> u8 {
             | Instruction::Sh { .. }
             | Instruction::Sw { .. }
             | Instruction::Sd { .. }
+            | Instruction::Fsh { .. }
             | Instruction::Fsw { .. }
             | Instruction::Fsd { .. }
             | Instruction::ScW { .. }
@@ -3719,6 +3867,15 @@ mod tests {
                 false,
             ),
             (
+                Instruction::Flh {
+                    rd: 2,
+                    rs1: 1,
+                    offset: 8,
+                },
+                true,
+                false,
+            ),
+            (
                 Instruction::LrW {
                     rd: 2,
                     rs1: 1,
@@ -3739,6 +3896,15 @@ mod tests {
             ),
             (
                 Instruction::Fsw {
+                    rs2: 0,
+                    rs1: 1,
+                    offset: 8,
+                },
+                false,
+                true,
+            ),
+            (
+                Instruction::Fsh {
                     rs2: 0,
                     rs1: 1,
                     offset: 8,

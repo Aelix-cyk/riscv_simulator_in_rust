@@ -37,6 +37,7 @@ fn decoder_mnemonics_match_objdump() {
     check_fixture("f.S", assemble::assemble_float);
     check_fixture("d.S", assemble::assemble_double);
     check_fixture("compressed_d.S", assemble::assemble_double);
+    check_fixture("h.S", assemble::assemble_half);
     for fixture in BITMANIP_FIXTURES {
         check_fixture(fixture, assemble::assemble_bitmanip);
     }

@@ -266,6 +266,93 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_FMSUB_D, inst::MASK_FMSUB_D, fmsub_d),
     row(inst::MATCH_FNMSUB_D, inst::MASK_FNMSUB_D, fnmsub_d),
     row(inst::MATCH_FNMADD_D, inst::MASK_FNMADD_D, fnmadd_d),
+    // Zfh loads, stores, arithmetic, and conversions.
+    row(inst::MATCH_FLH, inst::MASK_FLH, flh),
+    row(inst::MATCH_FSH, inst::MASK_FSH, fsh),
+    row(inst::MATCH_FADD_H, inst::MASK_FADD_H, fadd_h),
+    row(inst::MATCH_FSUB_H, inst::MASK_FSUB_H, fsub_h),
+    row(inst::MATCH_FMUL_H, inst::MASK_FMUL_H, fmul_h),
+    row(inst::MATCH_FDIV_H, inst::MASK_FDIV_H, fdiv_h),
+    row(
+        inst::MATCH_FSQRT_H,
+        fp_rounding_mask(inst::MASK_FSQRT_H),
+        fsqrt_h,
+    ),
+    row(inst::MATCH_FSGNJ_H, inst::MASK_FSGNJ_H, fsgnj_h),
+    row(inst::MATCH_FSGNJN_H, inst::MASK_FSGNJN_H, fsgnjn_h),
+    row(inst::MATCH_FSGNJX_H, inst::MASK_FSGNJX_H, fsgnjx_h),
+    row(inst::MATCH_FMIN_H, inst::MASK_FMIN_H, fmin_h),
+    row(inst::MATCH_FMAX_H, inst::MASK_FMAX_H, fmax_h),
+    row(inst::MATCH_FEQ_H, inst::MASK_FEQ_H, feq_h),
+    row(inst::MATCH_FLT_H, inst::MASK_FLT_H, flt_h),
+    row(inst::MATCH_FLE_H, inst::MASK_FLE_H, fle_h),
+    row(inst::MATCH_FCLASS_H, inst::MASK_FCLASS_H, fclass_h),
+    row(
+        inst::MATCH_FCVT_W_H,
+        fp_rounding_mask(inst::MASK_FCVT_W_H),
+        fcvt_w_h,
+    ),
+    row(
+        inst::MATCH_FCVT_WU_H,
+        fp_rounding_mask(inst::MASK_FCVT_WU_H),
+        fcvt_wu_h,
+    ),
+    row(
+        inst::MATCH_FCVT_L_H,
+        fp_rounding_mask(inst::MASK_FCVT_L_H),
+        fcvt_l_h,
+    ),
+    row(
+        inst::MATCH_FCVT_LU_H,
+        fp_rounding_mask(inst::MASK_FCVT_LU_H),
+        fcvt_lu_h,
+    ),
+    row(
+        inst::MATCH_FCVT_H_W,
+        fp_rounding_mask(inst::MASK_FCVT_H_W),
+        fcvt_h_w,
+    ),
+    row(
+        inst::MATCH_FCVT_H_WU,
+        fp_rounding_mask(inst::MASK_FCVT_H_WU),
+        fcvt_h_wu,
+    ),
+    row(
+        inst::MATCH_FCVT_H_L,
+        fp_rounding_mask(inst::MASK_FCVT_H_L),
+        fcvt_h_l,
+    ),
+    row(
+        inst::MATCH_FCVT_H_LU,
+        fp_rounding_mask(inst::MASK_FCVT_H_LU),
+        fcvt_h_lu,
+    ),
+    row(
+        inst::MATCH_FCVT_S_H,
+        fp_rounding_mask(inst::MASK_FCVT_S_H),
+        fcvt_s_h,
+    ),
+    row(
+        inst::MATCH_FCVT_H_S,
+        fp_rounding_mask(inst::MASK_FCVT_H_S),
+        fcvt_h_s,
+    ),
+    row(
+        inst::MATCH_FCVT_D_H,
+        fp_rounding_mask(inst::MASK_FCVT_D_H),
+        fcvt_d_h,
+    ),
+    row(
+        inst::MATCH_FCVT_H_D,
+        fp_rounding_mask(inst::MASK_FCVT_H_D),
+        fcvt_h_d,
+    ),
+    row(inst::MATCH_FMV_X_H, inst::MASK_FMV_X_H, fmv_x_h),
+    row(inst::MATCH_FMV_H_X, inst::MASK_FMV_H_X, fmv_h_x),
+    row(inst::MATCH_FMADD_H, inst::MASK_FMADD_H, fmadd_h),
+    row(inst::MATCH_FMSUB_H, inst::MASK_FMSUB_H, fmsub_h),
+    row(inst::MATCH_FNMSUB_H, inst::MASK_FNMSUB_H, fnmsub_h),
+    row(inst::MATCH_FNMADD_H, inst::MASK_FNMADD_H, fnmadd_h),
     // M-extension multiplication.
     row(inst::MATCH_MUL, inst::MASK_MUL, mul),
     row(inst::MATCH_MULH, inst::MASK_MULH, mulh),
@@ -699,6 +786,22 @@ fn fsw(word: Word) -> Instruction {
     }
 }
 
+fn flh(word: Word) -> Instruction {
+    Instruction::Flh {
+        rd: word.rd(),
+        rs1: word.rs1(),
+        offset: word.i_immediate(),
+    }
+}
+
+fn fsh(word: Word) -> Instruction {
+    Instruction::Fsh {
+        rs2: word.rs2(),
+        rs1: word.rs1(),
+        offset: word.s_immediate(),
+    }
+}
+
 fn fld(word: Word) -> Instruction {
     Instruction::Fld {
         rd: word.rd(),
@@ -748,6 +851,15 @@ fp_binary_builder!(fsgnjn_d, SignInjectNegated, Double);
 fp_binary_builder!(fsgnjx_d, SignInjectXor, Double);
 fp_binary_builder!(fmin_d, Min, Double);
 fp_binary_builder!(fmax_d, Max, Double);
+fp_binary_builder!(fadd_h, Add, Half);
+fp_binary_builder!(fsub_h, Sub, Half);
+fp_binary_builder!(fmul_h, Mul, Half);
+fp_binary_builder!(fdiv_h, Div, Half);
+fp_binary_builder!(fsgnj_h, SignInject, Half);
+fp_binary_builder!(fsgnjn_h, SignInjectNegated, Half);
+fp_binary_builder!(fsgnjx_h, SignInjectXor, Half);
+fp_binary_builder!(fmin_h, Min, Half);
+fp_binary_builder!(fmax_h, Max, Half);
 
 fn fsqrt_s(word: Word) -> Instruction {
     Instruction::FpSqrt {
@@ -761,6 +873,15 @@ fn fsqrt_s(word: Word) -> Instruction {
 fn fsqrt_d(word: Word) -> Instruction {
     Instruction::FpSqrt {
         format: FpFormat::Double,
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rounding: word.rounding(),
+    }
+}
+
+fn fsqrt_h(word: Word) -> Instruction {
+    Instruction::FpSqrt {
+        format: FpFormat::Half,
         rd: word.rd(),
         rs1: word.rs1(),
         rounding: word.rounding(),
@@ -791,6 +912,10 @@ fp_fused_builder!(fmadd_d, Madd, Double);
 fp_fused_builder!(fmsub_d, Msub, Double);
 fp_fused_builder!(fnmsub_d, Nmsub, Double);
 fp_fused_builder!(fnmadd_d, Nmadd, Double);
+fp_fused_builder!(fmadd_h, Madd, Half);
+fp_fused_builder!(fmsub_h, Msub, Half);
+fp_fused_builder!(fnmsub_h, Nmsub, Half);
+fp_fused_builder!(fnmadd_h, Nmadd, Half);
 
 macro_rules! fp_compare_builder {
     ($name:ident, $operation:ident, $format:ident) => {
@@ -812,6 +937,9 @@ fp_compare_builder!(fle_s, LessEqual, Single);
 fp_compare_builder!(feq_d, Equal, Double);
 fp_compare_builder!(flt_d, Less, Double);
 fp_compare_builder!(fle_d, LessEqual, Double);
+fp_compare_builder!(feq_h, Equal, Half);
+fp_compare_builder!(flt_h, Less, Half);
+fp_compare_builder!(fle_h, LessEqual, Half);
 
 fn fclass_s(word: Word) -> Instruction {
     Instruction::FpClass {
@@ -824,6 +952,14 @@ fn fclass_s(word: Word) -> Instruction {
 fn fclass_d(word: Word) -> Instruction {
     Instruction::FpClass {
         format: FpFormat::Double,
+        rd: word.rd(),
+        rs1: word.rs1(),
+    }
+}
+
+fn fclass_h(word: Word) -> Instruction {
+    Instruction::FpClass {
+        format: FpFormat::Half,
         rd: word.rd(),
         rs1: word.rs1(),
     }
@@ -852,6 +988,10 @@ fp_to_int_builder!(fcvt_w_d, WORD_BITS, false, Double);
 fp_to_int_builder!(fcvt_wu_d, WORD_BITS, true, Double);
 fp_to_int_builder!(fcvt_l_d, DOUBLEWORD_BITS, false, Double);
 fp_to_int_builder!(fcvt_lu_d, DOUBLEWORD_BITS, true, Double);
+fp_to_int_builder!(fcvt_w_h, WORD_BITS, false, Half);
+fp_to_int_builder!(fcvt_wu_h, WORD_BITS, true, Half);
+fp_to_int_builder!(fcvt_l_h, DOUBLEWORD_BITS, false, Half);
+fp_to_int_builder!(fcvt_lu_h, DOUBLEWORD_BITS, true, Half);
 
 macro_rules! int_to_fp_builder {
     ($name:ident, $width:expr, $unsigned:expr, $format:ident) => {
@@ -876,6 +1016,10 @@ int_to_fp_builder!(fcvt_d_w, WORD_BITS, false, Double);
 int_to_fp_builder!(fcvt_d_wu, WORD_BITS, true, Double);
 int_to_fp_builder!(fcvt_d_l, DOUBLEWORD_BITS, false, Double);
 int_to_fp_builder!(fcvt_d_lu, DOUBLEWORD_BITS, true, Double);
+int_to_fp_builder!(fcvt_h_w, WORD_BITS, false, Half);
+int_to_fp_builder!(fcvt_h_wu, WORD_BITS, true, Half);
+int_to_fp_builder!(fcvt_h_l, DOUBLEWORD_BITS, false, Half);
+int_to_fp_builder!(fcvt_h_lu, DOUBLEWORD_BITS, true, Half);
 
 fn fmv_x_w(word: Word) -> Instruction {
     Instruction::FpMoveToInt {
@@ -909,6 +1053,22 @@ fn fmv_d_x(word: Word) -> Instruction {
     }
 }
 
+fn fmv_x_h(word: Word) -> Instruction {
+    Instruction::FpMoveToInt {
+        format: FpFormat::Half,
+        rd: word.rd(),
+        rs1: word.rs1(),
+    }
+}
+
+fn fmv_h_x(word: Word) -> Instruction {
+    Instruction::FpMoveFromInt {
+        format: FpFormat::Half,
+        rd: word.rd(),
+        rs1: word.rs1(),
+    }
+}
+
 fn fcvt_s_d(word: Word) -> Instruction {
     Instruction::FpConvert {
         from: FpFormat::Double,
@@ -923,6 +1083,46 @@ fn fcvt_d_s(word: Word) -> Instruction {
     Instruction::FpConvert {
         from: FpFormat::Single,
         to: FpFormat::Double,
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rounding: word.rounding(),
+    }
+}
+
+fn fcvt_s_h(word: Word) -> Instruction {
+    Instruction::FpConvert {
+        from: FpFormat::Half,
+        to: FpFormat::Single,
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rounding: word.rounding(),
+    }
+}
+
+fn fcvt_d_h(word: Word) -> Instruction {
+    Instruction::FpConvert {
+        from: FpFormat::Half,
+        to: FpFormat::Double,
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rounding: word.rounding(),
+    }
+}
+
+fn fcvt_h_s(word: Word) -> Instruction {
+    Instruction::FpConvert {
+        from: FpFormat::Single,
+        to: FpFormat::Half,
+        rd: word.rd(),
+        rs1: word.rs1(),
+        rounding: word.rounding(),
+    }
+}
+
+fn fcvt_h_d(word: Word) -> Instruction {
+    Instruction::FpConvert {
+        from: FpFormat::Double,
+        to: FpFormat::Half,
         rd: word.rd(),
         rs1: word.rs1(),
         rounding: word.rounding(),

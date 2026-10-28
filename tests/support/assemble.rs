@@ -151,6 +151,15 @@ pub fn assemble_double(name: &str) -> Program {
     assemble_with_march(name, "rv64imafdc_zifencei_zicsr")
 }
 
+/// Assembles a fixture with half-precision floating point enabled.
+pub fn assemble_half(name: &str) -> Program {
+    assemble_with_march_and_isa(
+        name,
+        "rv64imafdc_zfh_zicsr_zifencei",
+        Some("rv64imafdc_zfh_zicsr_zifencei"),
+    )
+}
+
 /// Assembles a fixture with the B-extension subsets enabled.
 pub fn assemble_bitmanip(name: &str) -> Program {
     assemble_with_march_and_isa(

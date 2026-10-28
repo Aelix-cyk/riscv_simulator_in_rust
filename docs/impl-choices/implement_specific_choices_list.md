@@ -72,8 +72,8 @@ configuration's `HPM_EVENTS` list.
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| F/D register width and representation | 32 FPRs store 64-bit architectural bits; single-precision values are NaN-boxed | Decided |
-| F/D rounding and flags | Project-owned integer-backed operations implement all five rounding modes and all five IEEE flags | Decided |
+| F/D/H register width and representation | 32 FPRs store 64-bit architectural bits; single- and half-precision values are NaN-boxed | Decided |
+| F/D/H rounding and flags | Project-owned integer-backed operations implement all five rounding modes and all five IEEE flags | Decided |
 | Tininess and NaN policy | Spike-compatible tininess detection and canonical NaN results | Decided |
 | F CSR visibility | `fflags`, `frm`, and `fcsr` are U-accessible only while `mstatus.FS` is enabled | Decided |
 | `mstatus.FS` dirty updates | Precise updates whenever an FP instruction changes FPR or FCSR state | Decided |
@@ -113,6 +113,6 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 
 ## 8. Optional extensions
 
-`Zfh`, `V`, `Zkn`, `Zks`, `Sv48`, `Sv57`, `Svnapot`, `Ssu64xl`, `Sstc`,
+`V`, `Zkn`, `Zks`, `Sv48`, `Sv57`, `Svnapot`, `Ssu64xl`, `Sstc`,
 `Sscofpmf`, `Zkr`, and `H` (augmented) are still **Undecided** in the profile
 document; nothing here changes that yet.

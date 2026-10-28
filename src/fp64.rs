@@ -7,7 +7,7 @@ pub(crate) const CANONICAL_NAN: u64 = 0x7ff8_0000_0000_0000;
 /// Sign bit in a double-precision value.
 pub(crate) const SIGN_MASK: u64 = 1 << 63;
 
-const EXPONENT_MASK: u64 = 0x7ff << 52;
+pub(crate) const EXPONENT_MASK: u64 = 0x7ff << 52;
 const FRACTION_MASK: u64 = (1 << 52) - 1;
 const EXPONENT_BITS: u32 = 11;
 const FRACTION_BITS: u32 = 52;
