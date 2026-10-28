@@ -13,3 +13,4 @@
 | [0009 — HPM event selectors disagree with the ACT4 declaration](0009-hpm-events-mismatch-act4-config.md) | Fixed |
 | [0010 — CBO.ZERO leaves reservations in the middle of the block valid](0010-cbo-zero-leaves-middle-reservations-valid.md) | Fixed |
 | [0011 — cache-geometry status contradicts itself across the choice docs](0011-cache-geometry-status-inconsistent.md) | Fixed |
+| [0012 — widening FP conversions skip rounding-field validation](0012-widening-fp-conversions-skip-rounding-validation.md) | Fixed |

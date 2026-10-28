@@ -1580,6 +1580,7 @@ impl<B: Bus> Machine<B> {
         word: u32,
     ) -> Result<(), Exception> {
         self.require_fp_enabled(word)?;
+        let mode = self.rounding_mode(rounding, word)?;
         match (from, to) {
             (FpFormat::Half, FpFormat::Single) => {
                 let result = fp16::to_single(self.read_f16(rs1));
@@ -1594,17 +1595,14 @@ impl<B: Bus> Machine<B> {
                 self.write_fp64_result(rd, result);
             }
             (FpFormat::Single, FpFormat::Half) => {
-                let mode = self.rounding_mode(rounding, word)?;
                 let result = fp16::from_single(self.read_f32(rs1), mode);
                 self.write_fp16_result(rd, result);
             }
             (FpFormat::Double, FpFormat::Half) => {
-                let mode = self.rounding_mode(rounding, word)?;
                 let result = fp16::from_double(self.read_f64(rs1), mode);
                 self.write_fp16_result(rd, result);
             }
             (FpFormat::Double, FpFormat::Single) => {
-                let mode = self.rounding_mode(rounding, word)?;
                 let result = fp64::to_single(self.read_f64(rs1), mode);
                 self.write_fp_result(rd, result);
             }
@@ -2135,6 +2133,123 @@ mod tests {
         });
 
         assert_trap(&machine, inst::CAUSE_ILLEGAL_INSTRUCTION, 0, 0);
+    }
+
+    #[test]
+    fn widening_fp_conversions_validate_rounding_mode() {
+        const RESERVED_ROUNDING_MODES: [u8; 2] = [5, 6];
+        const DESTINATION_REGISTER: usize = 2;
+        const UNCHANGED_DESTINATION: u64 = 0x0123_4567_89ab_cdef;
+        let conversions = [
+            (FpFormat::Half, FpFormat::Single),
+            (FpFormat::Half, FpFormat::Double),
+            (FpFormat::Single, FpFormat::Double),
+        ];
+
+        for (from, to) in conversions {
+            for rounding in RESERVED_ROUNDING_MODES {
+                let mut machine = trapped_machine();
+                assert!(
+                    machine
+                        .cpu_mut()
+                        .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+                );
+                machine
+                    .cpu_mut()
+                    .write_fpr(DESTINATION_REGISTER, UNCHANGED_DESTINATION);
+                assert!(
+                    machine
+                        .cpu_mut()
+                        .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+                );
+
+                machine.execute(Instruction::FpConvert {
+                    from,
+                    to,
+                    rd: DESTINATION_REGISTER as u8,
+                    rs1: 1,
+                    rounding,
+                });
+
+                assert_trap(&machine, inst::CAUSE_ILLEGAL_INSTRUCTION, 0, 0);
+                assert_eq!(
+                    machine.cpu().read_fpr(DESTINATION_REGISTER),
+                    UNCHANGED_DESTINATION
+                );
+            }
+
+            let mut machine = trapped_machine();
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+            );
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_FRM, INVALID_ROUNDING_MODE)
+            );
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+            );
+
+            machine.execute(Instruction::FpConvert {
+                from,
+                to,
+                rd: DESTINATION_REGISTER as u8,
+                rs1: 1,
+                rounding: DYNAMIC_ROUNDING,
+            });
+
+            assert_trap(&machine, inst::CAUSE_ILLEGAL_INSTRUCTION, 0, 0);
+        }
+    }
+
+    #[test]
+    fn widening_fp_conversions_ignore_valid_rounding_mode() {
+        let conversions = [
+            (
+                FpFormat::Half,
+                FpFormat::Single,
+                HALF_NAN_BOX | 0x3e00,
+                NAN_BOX | 0x3fc0_0000,
+            ),
+            (
+                FpFormat::Half,
+                FpFormat::Double,
+                HALF_NAN_BOX | 0x3e00,
+                0x3ff8_0000_0000_0000,
+            ),
+            (
+                FpFormat::Single,
+                FpFormat::Double,
+                NAN_BOX | 0x3fc0_0000,
+                0x3ff8_0000_0000_0000,
+            ),
+        ];
+
+        for (from, to, source, expected) in conversions {
+            let mut machine = machine();
+            assert!(
+                machine
+                    .cpu_mut()
+                    .write_csr(inst::CSR_MSTATUS, FP_INITIAL_STATUS)
+            );
+            machine.cpu_mut().write_fpr(1, source);
+
+            machine.execute(Instruction::FpConvert {
+                from,
+                to,
+                rd: 2,
+                rs1: 1,
+                rounding: 3,
+            });
+
+            assert_eq!(machine.cpu().read_fpr(2), expected);
+            assert_eq!(machine.cpu().read_fcsr(), Some(0));
+        }
     }
 
     #[test]
