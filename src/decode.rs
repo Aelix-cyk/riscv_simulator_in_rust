@@ -697,6 +697,26 @@ pub enum Instruction {
     /// `fence.i` — instruction-fetch fence, from Zifencei.
     FenceI,
 
+    // Zicbom, Zicboz, and Zicbop cache-block operations.
+    /// `cbo.clean (rs1)`
+    CboClean { rs1: u8 },
+    /// `cbo.flush (rs1)`
+    CboFlush { rs1: u8 },
+    /// `cbo.inval (rs1)`
+    CboInval { rs1: u8 },
+    /// `cbo.zero (rs1)`
+    CboZero { rs1: u8 },
+    /// `prefetch.i offset(rs1)`
+    PrefetchI { rs1: u8, offset: i64 },
+    /// `prefetch.r offset(rs1)`
+    PrefetchR { rs1: u8, offset: i64 },
+    /// `prefetch.w offset(rs1)`
+    PrefetchW { rs1: u8, offset: i64 },
+
+    // Zihintpause.
+    /// `pause`
+    Pause,
+
     // Zicsr.
     /// `csrrw rd, csr, rs1`
     Csrrw { rd: u8, csr: u16, rs1: u8 },
@@ -1841,6 +1861,14 @@ impl Instruction {
             Instruction::Sd { .. } => "sd",
             Instruction::Fence { .. } => "fence",
             Instruction::FenceI => "fence.i",
+            Instruction::CboClean { .. } => "cbo.clean",
+            Instruction::CboFlush { .. } => "cbo.flush",
+            Instruction::CboInval { .. } => "cbo.inval",
+            Instruction::CboZero { .. } => "cbo.zero",
+            Instruction::PrefetchI { .. } => "prefetch.i",
+            Instruction::PrefetchR { .. } => "prefetch.r",
+            Instruction::PrefetchW { .. } => "prefetch.w",
+            Instruction::Pause => "pause",
             Instruction::Csrrw { .. } => "csrrw",
             Instruction::Csrrs { .. } => "csrrs",
             Instruction::Csrrc { .. } => "csrrc",
@@ -2268,6 +2296,20 @@ impl Instruction {
                 format!("fence {},{}", fence_set(pred), fence_set(succ))
             }
             Instruction::FenceI => "fence.i".to_owned(),
+            Instruction::CboClean { rs1 } => cache_block_op("cbo.clean", rs1),
+            Instruction::CboFlush { rs1 } => cache_block_op("cbo.flush", rs1),
+            Instruction::CboInval { rs1 } => cache_block_op("cbo.inval", rs1),
+            Instruction::CboZero { rs1 } => cache_block_op("cbo.zero", rs1),
+            Instruction::PrefetchI { rs1, offset } => {
+                format!("prefetch.i {offset}({})", abi_name(rs1))
+            }
+            Instruction::PrefetchR { rs1, offset } => {
+                format!("prefetch.r {offset}({})", abi_name(rs1))
+            }
+            Instruction::PrefetchW { rs1, offset } => {
+                format!("prefetch.w {offset}({})", abi_name(rs1))
+            }
+            Instruction::Pause => "pause".to_owned(),
             Instruction::Csrrw { rd, csr, rs1 } => csr_reg_op("csrrw", rd, csr, rs1),
             Instruction::Csrrs { rd, csr, rs1 } => csr_reg_op("csrrs", rd, csr, rs1),
             Instruction::Csrrc { rd, csr, rs1 } => csr_reg_op("csrrc", rd, csr, rs1),
@@ -2305,6 +2347,10 @@ fn imm_op(mnemonic: &str, rd: u8, rs1: u8, imm: i64) -> String {
 /// `mnemonic rd,rs1`
 fn unary_op(mnemonic: &str, rd: u8, rs1: u8) -> String {
     format!("{mnemonic} {},{}", abi_name(rd), abi_name(rs1))
+}
+
+fn cache_block_op(mnemonic: &str, rs1: u8) -> String {
+    format!("{mnemonic} ({})", abi_name(rs1))
 }
 
 fn fp_binary_mnemonic(op: FpBinaryOp, format: FpFormat) -> &'static str {
@@ -2833,5 +2879,12 @@ mod tests {
                 rounding: 4,
             })
         );
+    }
+
+    #[test]
+    fn prefetch_hints_preserve_aligned_offsets() {
+        assert_eq!(render(0x0a11_6013).unwrap(), "prefetch.r 160(sp)");
+        assert_eq!(render(0xfe01_e013).unwrap(), "prefetch.i -32(gp)");
+        assert_eq!(render(0x3e32_6013).unwrap(), "prefetch.w 992(tp)");
     }
 }

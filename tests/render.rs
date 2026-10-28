@@ -20,6 +20,9 @@ const COMPRESSED_FIXTURES: [&str; 2] = ["compressed.S", "compressed_boundaries.S
 /// RV64B fixtures.
 const BITMANIP_FIXTURES: [&str; 2] = ["b.S", "b_bits.S"];
 
+/// Cache-block and pause fixtures.
+const CACHE_BLOCK_FIXTURES: [&str; 1] = ["cache_blocks.S"];
+
 /// Legal mnemonics that this milestone does not decode yet.
 const UNIMPLEMENTED: [&str; 0] = [];
 
@@ -36,6 +39,9 @@ fn renderer_matches_objdump_text() {
     check_fixture("compressed_d.S", assemble::assemble_double);
     for fixture in BITMANIP_FIXTURES {
         check_fixture(fixture, assemble::assemble_bitmanip);
+    }
+    for fixture in CACHE_BLOCK_FIXTURES {
+        check_fixture(fixture, assemble::assemble_cache_blocks);
     }
 }
 

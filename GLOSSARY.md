@@ -59,6 +59,7 @@ category and listed alphabetically within each section.
 - **B extension** — Bit manipulation, formed for this profile by Zba (address generation), Zbb (basic operations), and Zbs (single-bit operations).
 - **AMO** — Atomic memory operation: an A-extension instruction that reads, modifies, and writes memory indivisibly.
 - **C extension** — Compressed instructions: 16-bit encodings of common operations.
+- **Cache-block operation (CBO)** — An explicit architectural memory operation that manages, prefetches, or zeroes a naturally aligned cache block.
 - **D extension** — Double-precision (64-bit) IEEE-754 floating point.
 - **F extension** — Single-precision (32-bit) IEEE-754 floating point.
 - **Floating-point register file** — 32 separate registers (`f0`-`f31`) holding floating-point values in F/D code.

@@ -11,8 +11,17 @@ use std::process::Command;
 
 use compliance::{GateReport, expected_failures, required_dir, run_checked, run_elf};
 
-const LEGACY_FAMILIES: [&str; 10] = [
-    "rv64ui", "rv64um", "rv64ua", "rv64uc", "rv64uzba", "rv64uzbb", "rv64uzbs", "rv64mi", "rv64uf",
+const LEGACY_FAMILIES: [&str; 11] = [
+    "rv64ui",
+    "rv64um",
+    "rv64ua",
+    "rv64uc",
+    "rv64uzba",
+    "rv64uzbb",
+    "rv64uzbs",
+    "rv64mi",
+    "rv64uf",
+    "rv64mzicbo",
     "rv64ud",
 ];
 

@@ -18,6 +18,9 @@ const DOUBLEWORD_BITS: u32 = 64;
 const REGISTER_FIELD_MASK: u32 = 0x1f;
 const RS2_SHIFT: u32 = 20;
 const ZEXT_H_RS2_MASK: u32 = REGISTER_FIELD_MASK << RS2_SHIFT;
+const PREFETCH_ATTRIBUTE_MASK: i64 = 0x1f;
+const MATCH_PAUSE: u32 = 0x0100_000f;
+const MASK_PAUSE: u32 = u32::MAX;
 
 /// One row of the instruction table.
 struct Row {
@@ -325,6 +328,11 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_SB, inst::MASK_SB, sb),
     row(inst::MATCH_SH, inst::MASK_SH, sh),
     // Ordering.
+    row(inst::MATCH_CBO_CLEAN, inst::MASK_CBO_CLEAN, cbo_clean),
+    row(inst::MATCH_CBO_FLUSH, inst::MASK_CBO_FLUSH, cbo_flush),
+    row(inst::MATCH_CBO_INVAL, inst::MASK_CBO_INVAL, cbo_inval),
+    row(inst::MATCH_CBO_ZERO, inst::MASK_CBO_ZERO, cbo_zero),
+    row(MATCH_PAUSE, MASK_PAUSE, pause),
     row(inst::MATCH_FENCE, inst::MASK_FENCE, fence),
     row(inst::MATCH_FENCE_I, inst::MASK_FENCE_I, fence_i),
     // Zicsr.
@@ -384,6 +392,30 @@ fn xori(word: Word) -> Instruction {
 }
 
 fn ori(word: Word) -> Instruction {
+    if word.rd() == 0 {
+        let offset = word.i_immediate() & !PREFETCH_ATTRIBUTE_MASK;
+        match word.i_immediate() & PREFETCH_ATTRIBUTE_MASK {
+            0 => {
+                return Instruction::PrefetchI {
+                    rs1: word.rs1(),
+                    offset,
+                };
+            }
+            1 => {
+                return Instruction::PrefetchR {
+                    rs1: word.rs1(),
+                    offset,
+                };
+            }
+            3 => {
+                return Instruction::PrefetchW {
+                    rs1: word.rs1(),
+                    offset,
+                };
+            }
+            _ => {}
+        }
+    }
     Instruction::Ori {
         rd: word.rd(),
         rs1: word.rs1(),
@@ -1246,6 +1278,26 @@ fn fence(word: Word) -> Instruction {
 
 fn fence_i(_word: Word) -> Instruction {
     Instruction::FenceI
+}
+
+fn cbo_clean(word: Word) -> Instruction {
+    Instruction::CboClean { rs1: word.rs1() }
+}
+
+fn cbo_flush(word: Word) -> Instruction {
+    Instruction::CboFlush { rs1: word.rs1() }
+}
+
+fn cbo_inval(word: Word) -> Instruction {
+    Instruction::CboInval { rs1: word.rs1() }
+}
+
+fn cbo_zero(word: Word) -> Instruction {
+    Instruction::CboZero { rs1: word.rs1() }
+}
+
+fn pause(_word: Word) -> Instruction {
+    Instruction::Pause
 }
 
 fn csrrw(word: Word) -> Instruction {

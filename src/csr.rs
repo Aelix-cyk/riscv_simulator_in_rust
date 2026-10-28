@@ -69,6 +69,12 @@ const FRM_BITS: u32 = 3;
 const FRM_VALUE_MASK: u64 = (1 << FRM_BITS) - 1;
 const FRM_MASK: u64 = FRM_VALUE_MASK << FRM_SHIFT;
 const FCSR_MASK: u64 = FFLAGS_MASK | FRM_MASK;
+const MENVCFG_CBIE_SHIFT: u32 = 4;
+const MENVCFG_CBIE_MASK: u64 = 0b11 << MENVCFG_CBIE_SHIFT;
+const MENVCFG_CBIE_RESERVED: u64 = 0b10 << MENVCFG_CBIE_SHIFT;
+const MENVCFG_CBCFE: u64 = 1 << 6;
+const MENVCFG_CBZE: u64 = 1 << 7;
+const MENVCFG_WRITABLE: u64 = MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE;
 
 /// Architectural machine-mode CSR state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -88,6 +94,7 @@ pub(crate) struct Csrs {
     mip: u64,
     mcounteren: u64,
     mcountinhibit: u64,
+    menvcfg: u64,
     mhpmcounters: [u64; HPM_COUNTER_COUNT],
     mhpmevents: [u64; HPM_COUNTER_COUNT],
     mcycle: u64,
@@ -123,7 +130,7 @@ impl Csrs {
             inst::CSR_MIDELEG => Some(self.mideleg),
             inst::CSR_MCOUNTEREN => Some(self.mcounteren),
             inst::CSR_MCOUNTINHIBIT => Some(self.mcountinhibit),
-            inst::CSR_MENVCFG => Some(0),
+            inst::CSR_MENVCFG => Some(self.menvcfg),
             inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => self.read_mhpmevent(address),
             inst::CSR_PMPCFG0 => Some(self.pmpcfg0),
             inst::CSR_PMPADDR0 => Some(self.pmpaddr0),
@@ -192,7 +199,7 @@ impl Csrs {
             inst::CSR_MIDELEG => self.mideleg = value,
             inst::CSR_MCOUNTEREN => self.mcounteren = value & COUNTER_ENABLE_MASK,
             inst::CSR_MCOUNTINHIBIT => self.mcountinhibit = value & MCOUNTINHIBIT_MASK,
-            inst::CSR_MENVCFG => {}
+            inst::CSR_MENVCFG => self.menvcfg = Self::menvcfg_value(value & MENVCFG_WRITABLE),
             inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => {
                 self.write_mhpmevent(address, value);
             }
@@ -254,6 +261,31 @@ impl Csrs {
         if self.fp_enabled() {
             self.mstatus = (self.mstatus & !MSTATUS_FS_MASK) | MSTATUS_FS_DIRTY;
         }
+    }
+
+    /// Whether U-mode may execute cache-block clean and flush operations.
+    pub(crate) fn cache_block_clean_flush_enabled(self) -> bool {
+        self.menvcfg & MENVCFG_CBCFE != 0
+    }
+
+    /// Whether U-mode may execute cache-block zero operations.
+    pub(crate) fn cache_block_zero_enabled(self) -> bool {
+        self.menvcfg & MENVCFG_CBZE != 0
+    }
+
+    /// Whether U-mode may execute cache-block invalidate operations.
+    pub(crate) fn cache_block_invalidate_enabled(self) -> bool {
+        self.menvcfg & MENVCFG_CBIE_MASK != 0
+    }
+
+    fn menvcfg_value(value: u64) -> u64 {
+        let cbie = value & MENVCFG_CBIE_MASK;
+        let canonical_cbie = if cbie == MENVCFG_CBIE_RESERVED {
+            0
+        } else {
+            cbie
+        };
+        canonical_cbie | (value & (MENVCFG_CBCFE | MENVCFG_CBZE))
     }
 
     fn mstatus_value(self) -> u64 {
@@ -585,6 +617,25 @@ mod tests {
                 "HPM_EVENTS is missing retained selector {retained}"
             );
         }
+    }
+
+    #[test]
+    fn menvcfg_exposes_cmo_controls_and_canonicalizes_cbie() {
+        let mut csrs = Csrs::default();
+        assert!(csrs.write(inst::CSR_MENVCFG, u64::MAX));
+        assert_eq!(
+            csrs.read(inst::CSR_MENVCFG),
+            Some(MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE)
+        );
+        assert!(csrs.cache_block_invalidate_enabled());
+        assert!(csrs.cache_block_clean_flush_enabled());
+        assert!(csrs.cache_block_zero_enabled());
+
+        assert!(csrs.write(inst::CSR_MENVCFG, 0b10 << MENVCFG_CBIE_SHIFT));
+        assert_eq!(csrs.read(inst::CSR_MENVCFG), Some(0));
+        assert!(!csrs.cache_block_invalidate_enabled());
+        assert!(!csrs.cache_block_clean_flush_enabled());
+        assert!(!csrs.cache_block_zero_enabled());
     }
 
     #[test]

@@ -7,6 +7,7 @@ aelix's RISC-V Simulator in Rust (aRVSR)
 A 64-bit hart that executes RV64IMAFDCB with M/U privilege plus Zicsr and Zicntr —
 the integer ALU operations, all integer multiply/divide and atomic instructions,
 the Zba/Zbb/Zbs bit-manipulation instructions,
+64-byte cache-block management, zero, and prefetch operations, `pause`,
 single- and double-precision floating point, Zca/Zcd compressed instructions,
 branches, jumps, loads and stores,
 `fence`/`fence.i`, the six CSR read/modify/write forms, and deterministic cycle,

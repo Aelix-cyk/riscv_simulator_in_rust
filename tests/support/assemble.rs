@@ -160,6 +160,15 @@ pub fn assemble_bitmanip(name: &str) -> Program {
     )
 }
 
+/// Assembles a fixture with cache-block and pause hints enabled.
+pub fn assemble_cache_blocks(name: &str) -> Program {
+    assemble_with_march_and_isa(
+        name,
+        "rv64imac_zicbom_zicboz_zicbop_zihintpause_zicsr_zifencei",
+        Some("rv64imafdc_zicbom_zicboz_zicbop_zihintpause_zicsr_zifencei"),
+    )
+}
+
 /// Assembles a fixture for a selected ISA string.
 fn assemble_with_march(name: &str, march: &str) -> Program {
     assemble_with_march_and_isa(name, march, None)

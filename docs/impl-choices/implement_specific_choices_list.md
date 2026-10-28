@@ -30,8 +30,9 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | PMA regions and attributes | The whole region is cacheable, coherent main memory | Open (implicit today) |
 | PMP entries and granularity | None | Open |
 | Misaligned access outside cacheable, coherent main memory | Main memory supports misaligned access (Zicclsm); no other regions exist | Open |
-| Cache geometry and coherence | No cache model | Open — Zic64b constrains any later choice to 64-byte, naturally aligned blocks or a compatible longer/shorter scheme |
-| Cache-block operations (Zicbom/bop/boz) | None | Open |
+| Cache geometry and coherence | No cache model; architectural cache blocks are 64 bytes and naturally aligned | Decided |
+| Cache-block operations (Zicbom/bop/boz) | Management operations validate the full block and otherwise do nothing; `CBO.ZERO` preflights and clears the block; prefetches are untrapping hints | Decided |
+| CBO privilege controls | `menvcfg.CBZE`, `CBCFE`, and WARL `CBIE` gate U-mode operations and reset to zero; M-mode is always enabled | Decided |
 
 ## 3. Traps, interrupts, counters, and timers
 
@@ -45,7 +46,7 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 | Hardware performance events | One-hot selector bits for retired instructions, loads, stores, and branches/jumps; faulting attempts do not count | Decided |
 | Base counters | Full 64-bit `mcycle` and `minstret`, with `cycle`, `time`, and `instret` aliases; `time` mirrors `mcycle` | Decided |
 | Counter access control | `mcounteren` gates U-mode reads; `mcountinhibit` stops base and HPM counting | Decided |
-| `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; the profile allows `PAUSE` to execute as a NOP | Open |
+| `WFI` and `PAUSE` behaviour | `WFI` not decoded yet; `PAUSE` executes as a NOP | Decided for `PAUSE` |
 | Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec` | Decided |
 
 ### HPM event selector encoding

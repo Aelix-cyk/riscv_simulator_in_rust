@@ -34,11 +34,11 @@ mandatory here by reference, so these rows gate conformance too.
 | RVA22U64 | Za64rs — reservation sets contiguous, naturally aligned, at most 64 bytes | Fixed | Tied to the 64-byte block size |
 | RVA22U64 | B — bit manipulation | Implemented | Zba, Zbb, and Zbs |
 | RVA22U64 | Zihpm — hardware performance counters | Implemented | Three event-selectable counters; the other 26 are read-only zero |
-| RVA22U64 | Zihintpause — PAUSE hint | Fixed | May execute as a NOP |
-| RVA22U64 | Zic64b — cache blocks 64 bytes, naturally aligned | Fixed | Longer blocks need 64-byte sub-blocks; shorter blocks need sequenced operations |
-| RVA22U64 | Zicbom — cache-block management operations | Fixed | |
-| RVA22U64 | Zicbop — cache-block prefetch operations | Fixed | HINT; may be ignored |
-| RVA22U64 | Zicboz — cache-block zero operations | Fixed | |
+| RVA22U64 | Zihintpause — PAUSE hint | Implemented | Executes as a NOP |
+| RVA22U64 | Zic64b — cache blocks 64 bytes, naturally aligned | Implemented | Architectural block size is 64 bytes |
+| RVA22U64 | Zicbom — cache-block management operations | Implemented | Full-block check, then cacheless no-op |
+| RVA22U64 | Zicbop — cache-block prefetch operations | Implemented | Untrapping hints; no cache effect |
+| RVA22U64 | Zicboz — cache-block zero operations | Implemented | Preflight then clear the containing block |
 | RVA22U64 | Zfhmin — half-precision transfer and convert | Fixed | |
 | RVA22U64 | Zkt — data-independent execution time | Fixed | |
 

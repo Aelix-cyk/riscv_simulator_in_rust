@@ -16,7 +16,8 @@ use crate::trap::Trap;
 const MIN_INSTRUCTION_BYTES: u64 = 2;
 const HALFWORD_BITS: u32 = 16;
 const EMPTY_INSTRUCTION_BITS: u32 = 0;
-const RESERVATION_BYTES: u64 = 8;
+const DOUBLEWORD_BYTES: u64 = 8;
+const RESERVATION_BYTES: u64 = DOUBLEWORD_BYTES;
 const RESERVATION_ALIGNMENT_MASK: u64 = !(RESERVATION_BYTES - 1);
 const WORD_BITS: u32 = 32;
 const DYNAMIC_ROUNDING: u8 = 7;
@@ -27,6 +28,9 @@ const BYTE_MASK: u64 = u8::MAX as u64;
 const SHIFT_ONE: u32 = 1;
 const SHIFT_TWO: u32 = 2;
 const SHIFT_THREE: u32 = 3;
+const CACHE_BLOCK_BYTES: u64 = 64;
+const CACHE_BLOCK_DOUBLEWORDS: u64 = CACHE_BLOCK_BYTES / DOUBLEWORD_BYTES;
+const CACHE_BLOCK_ALIGNMENT_MASK: u64 = !(CACHE_BLOCK_BYTES - 1);
 
 /// A synchronous exception ready for architectural trap delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +64,14 @@ enum AmoOperation {
     Max,
     Minu,
     Maxu,
+}
+
+/// CSR-controlled cache-block operation classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheBlockAccess {
+    CleanFlush,
+    Invalidate,
+    Zero,
 }
 
 /// Why [`Machine::run`] returned.
@@ -958,6 +970,22 @@ impl<B: Bus> Machine<B> {
             // Ordering operations have no effect on one hart with no cache model:
             // the shared PC update below retires them.
             Instruction::Fence { .. } | Instruction::FenceI => {}
+            Instruction::CboClean { rs1 } => {
+                self.execute_cache_block_management(rs1, word, CacheBlockAccess::CleanFlush)?;
+            }
+            Instruction::CboFlush { rs1 } => {
+                self.execute_cache_block_management(rs1, word, CacheBlockAccess::CleanFlush)?;
+            }
+            Instruction::CboInval { rs1 } => {
+                self.execute_cache_block_management(rs1, word, CacheBlockAccess::Invalidate)?;
+            }
+            Instruction::CboZero { rs1 } => {
+                self.execute_cache_block_zero(rs1, word)?;
+            }
+            Instruction::PrefetchI { .. }
+            | Instruction::PrefetchR { .. }
+            | Instruction::PrefetchW { .. }
+            | Instruction::Pause => {}
             Instruction::Csrrw { rd, csr, rs1 } => {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
@@ -1479,6 +1507,62 @@ impl<B: Bus> Machine<B> {
         }
     }
 
+    /// Executes a cache-block management operation on the cacheless bus.
+    fn execute_cache_block_management(
+        &mut self,
+        rs1: u8,
+        word: u32,
+        access: CacheBlockAccess,
+    ) -> Result<(), Exception> {
+        self.require_cache_block_access(access, word)?;
+        let address = self.gpr(rs1);
+        let block = address & CACHE_BLOCK_ALIGNMENT_MASK;
+        self.bus
+            .check_write(block, CACHE_BLOCK_BYTES)
+            .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))
+    }
+
+    /// Executes cache-block zero after checking the complete block.
+    fn execute_cache_block_zero(&mut self, rs1: u8, word: u32) -> Result<(), Exception> {
+        self.require_cache_block_access(CacheBlockAccess::Zero, word)?;
+        let address = self.gpr(rs1);
+        let block = address & CACHE_BLOCK_ALIGNMENT_MASK;
+        self.bus
+            .check_write(block, CACHE_BLOCK_BYTES)
+            .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+
+        for index in 0..CACHE_BLOCK_DOUBLEWORDS {
+            let offset = index * DOUBLEWORD_BYTES;
+            self.bus
+                .write_u64(block.wrapping_add(offset), 0)
+                .map_err(|_| Exception::new(inst::CAUSE_STORE_ACCESS, address))?;
+        }
+        self.invalidate_reservation(block, CACHE_BLOCK_BYTES);
+        Ok(())
+    }
+
+    /// Applies U-mode CBO enable controls; M-mode is always enabled.
+    fn require_cache_block_access(
+        &self,
+        access: CacheBlockAccess,
+        word: u32,
+    ) -> Result<(), Exception> {
+        let enabled = self.cpu.privilege() == PrivilegeMode::Machine
+            || match access {
+                CacheBlockAccess::CleanFlush => self.cpu.csrs().cache_block_clean_flush_enabled(),
+                CacheBlockAccess::Invalidate => self.cpu.csrs().cache_block_invalidate_enabled(),
+                CacheBlockAccess::Zero => self.cpu.csrs().cache_block_zero_enabled(),
+            };
+        if enabled {
+            Ok(())
+        } else {
+            Err(Exception::new(
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                u64::from(word),
+            ))
+        }
+    }
+
     /// Reads an FPR, converting an unboxed value to the canonical NaN.
     fn read_f32(&self, index: u8) -> u32 {
         let value = self.read_fpr(index);
@@ -1703,6 +1787,7 @@ fn retirement_events(instruction: Instruction) -> u8 {
             | Instruction::Fsd { .. }
             | Instruction::ScW { .. }
             | Instruction::ScD { .. }
+            | Instruction::CboZero { .. }
             | Instruction::AmoSwapW { .. }
             | Instruction::AmoAddW { .. }
             | Instruction::AmoXorW { .. }
@@ -1760,6 +1845,9 @@ mod tests {
     const COUNTER_CY_ENABLE: u64 = 1;
     const CYCLE_RELOAD_VALUE: u64 = 42;
     const HPM_COUNTER_3_BIT: u64 = 1 << 3;
+    const MENVCFG_CBIE_FLUSH: u64 = 1 << 4;
+    const MENVCFG_CBCFE: u64 = 1 << 6;
+    const MENVCFG_CBZE: u64 = 1 << 7;
     const FP_INITIAL_STATUS: u64 = 1 << 13;
     const FP_DIRTY_STATUS: u64 = 0b11 << 13;
     const FADD_FT2_FT0_FT1: u32 = 0x0010_7153;
@@ -3677,6 +3765,7 @@ mod tests {
                 false,
                 true,
             ),
+            (Instruction::CboZero { rs1: 1 }, false, true),
         ];
 
         for (instruction, load, store) in cases {
@@ -3768,5 +3857,126 @@ mod tests {
         });
 
         assert_eq!(machine.cpu().read_csr(inst::CSR_MHPMCOUNTER3), Some(42));
+    }
+
+    #[test]
+    fn cache_block_management_checks_the_containing_block() {
+        let mut machine = Machine::new(Memory::new());
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(1, DRAM_BASE + 17);
+        machine.bus_mut().write_u8(DRAM_BASE + 10, 0x5a).unwrap();
+
+        machine.execute(Instruction::CboClean { rs1: 1 });
+
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + 4);
+        assert_eq!(machine.bus_mut().read_u8(DRAM_BASE + 10).unwrap(), 0x5a);
+
+        let mut trapped = trapped_machine();
+        trapped.cpu_mut().set_pc(DRAM_BASE);
+        trapped.cpu_mut().write_gpr(1, DRAM_BASE - 1);
+        trapped.execute(Instruction::CboFlush { rs1: 1 });
+
+        assert_trap(&trapped, inst::CAUSE_STORE_ACCESS, DRAM_BASE - 1, DRAM_BASE);
+    }
+
+    #[test]
+    fn cache_block_zero_clears_the_containing_block() {
+        let mut machine = Machine::new(Memory::new());
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(1, DRAM_BASE + 17);
+        for offset in 0..CACHE_BLOCK_BYTES {
+            machine
+                .bus_mut()
+                .write_u8(DRAM_BASE + offset, 0xa5)
+                .unwrap();
+        }
+
+        machine.execute(Instruction::CboZero { rs1: 1 });
+
+        for offset in 0..CACHE_BLOCK_BYTES {
+            assert_eq!(machine.bus_mut().read_u8(DRAM_BASE + offset).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn cache_block_zero_faults_without_partial_writes() {
+        let mut machine = Machine::new(Memory::with_size(32));
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(1, DRAM_BASE);
+        for offset in 0..32 {
+            machine
+                .bus_mut()
+                .write_u8(DRAM_BASE + offset, 0x5a)
+                .unwrap();
+        }
+
+        machine.execute(Instruction::CboZero { rs1: 1 });
+
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(u64::from(inst::CAUSE_STORE_ACCESS))
+        );
+        for offset in 0..32 {
+            assert_eq!(machine.bus_mut().read_u8(DRAM_BASE + offset).unwrap(), 0x5a);
+        }
+    }
+
+    #[test]
+    fn user_cache_block_operations_require_menvcfg_enables() {
+        let mut disabled = trapped_machine();
+        disabled.cpu_mut().set_privilege(PrivilegeMode::User);
+        disabled.cpu_mut().write_gpr(1, DRAM_BASE);
+
+        disabled.execute(Instruction::CboZero { rs1: 1 });
+
+        assert_eq!(
+            disabled.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(u64::from(inst::CAUSE_ILLEGAL_INSTRUCTION))
+        );
+
+        let mut enabled = machine();
+        assert!(enabled.cpu_mut().write_csr(
+            inst::CSR_MENVCFG,
+            MENVCFG_CBIE_FLUSH | MENVCFG_CBCFE | MENVCFG_CBZE
+        ));
+        enabled.cpu_mut().set_privilege(PrivilegeMode::User);
+        enabled.cpu_mut().write_gpr(1, DRAM_BASE);
+
+        enabled.execute(Instruction::CboClean { rs1: 1 });
+        enabled.execute(Instruction::CboFlush { rs1: 1 });
+        enabled.execute(Instruction::CboInval { rs1: 1 });
+        enabled.execute(Instruction::CboZero { rs1: 1 });
+        enabled.cpu_mut().set_privilege(PrivilegeMode::Machine);
+
+        assert_eq!(
+            enabled.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(0),
+            "enabled U-mode CBO operations must retire without trapping"
+        );
+    }
+
+    #[test]
+    fn prefetch_and_pause_are_untrapping_hints() {
+        let mut machine = machine();
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine.cpu_mut().write_gpr(1, DRAM_BASE - 1);
+
+        for instruction in [
+            Instruction::PrefetchI { rs1: 1, offset: 0 },
+            Instruction::PrefetchR {
+                rs1: 1,
+                offset: 160,
+            },
+            Instruction::PrefetchW {
+                rs1: 1,
+                offset: -32,
+            },
+            Instruction::Pause,
+        ] {
+            machine.execute(instruction);
+        }
+
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MCAUSE), Some(0));
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + 16);
     }
 }
