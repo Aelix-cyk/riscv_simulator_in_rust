@@ -435,6 +435,17 @@ const TABLE: &[Row] = &[
     row(inst::MATCH_MRET, inst::MASK_MRET, mret),
     row(inst::MATCH_SRET, inst::MASK_SRET, sret),
     row(inst::MATCH_WFI, inst::MASK_WFI, wfi),
+    row(inst::MATCH_SINVAL_VMA, inst::MASK_SINVAL_VMA, sinval_vma),
+    row(
+        inst::MATCH_SFENCE_W_INVAL,
+        inst::MASK_SFENCE_W_INVAL,
+        sfence_w_inval,
+    ),
+    row(
+        inst::MATCH_SFENCE_INVAL_IR,
+        inst::MASK_SFENCE_INVAL_IR,
+        sfence_inval_ir,
+    ),
     row(inst::MATCH_SFENCE_VMA, inst::MASK_SFENCE_VMA, sfence_vma),
 ];
 
@@ -1569,6 +1580,21 @@ fn sret(_word: Word) -> Instruction {
 
 fn wfi(_word: Word) -> Instruction {
     Instruction::Wfi
+}
+
+fn sinval_vma(word: Word) -> Instruction {
+    Instruction::SinvalVma {
+        rs1: word.rs1(),
+        rs2: word.rs2(),
+    }
+}
+
+fn sfence_w_inval(_word: Word) -> Instruction {
+    Instruction::SfenceWInval
+}
+
+fn sfence_inval_ir(_word: Word) -> Instruction {
+    Instruction::SfenceInvalIr
 }
 
 fn sfence_vma(word: Word) -> Instruction {

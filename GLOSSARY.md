@@ -27,6 +27,8 @@ category and listed alphabetically within each section.
 - **RV64I** — The 64-bit base integer ISA, the minimal instruction set this simulator targets, extended by the RVA22S64 profile.
 - **Sv39** — RISC-V's 39-bit, three-level page-based virtual-memory scheme.
 - **Svade** — A mode where invalid Accessed or Dirty PTE state raises page faults instead of being updated in hardware.
+- **Svinval** — Fine-grained translation invalidation instructions that separate invalidation from the ordering guarantees of `SFENCE.VMA`.
+- **Svpbmt** — Page-based memory types: leaf PTEs can select PMA/default, non-cacheable, or strongly ordered I/O behavior.
 - **TLB** — Translation Lookaside Buffer: a cache of virtual-to-physical page mappings.
 - **ASID** — Address Space Identifier, used to distinguish TLB entries belonging to different address spaces.
 - **PTE** — Page Table Entry, describing a page-table link or leaf mapping and its permissions.

@@ -746,6 +746,12 @@ pub enum Instruction {
     Sret,
     /// `wfi`
     Wfi,
+    /// `sinval.vma rs1,rs2`
+    SinvalVma { rs1: u8, rs2: u8 },
+    /// `sfence.w.inval`
+    SfenceWInval,
+    /// `sfence.inval.ir`
+    SfenceInvalIr,
     /// `sfence.vma rs1,rs2`
     SfenceVma { rs1: u8, rs2: u8 },
 
@@ -1917,6 +1923,9 @@ impl Instruction {
             Instruction::Mret => "mret",
             Instruction::Sret => "sret",
             Instruction::Wfi => "wfi",
+            Instruction::SinvalVma { .. } => "sinval.vma",
+            Instruction::SfenceWInval => "sfence.w.inval",
+            Instruction::SfenceInvalIr => "sfence.inval.ir",
             Instruction::SfenceVma { .. } => "sfence.vma",
             Instruction::Lui { .. } => "lui",
             Instruction::Auipc { .. } => "auipc",
@@ -2363,6 +2372,11 @@ impl Instruction {
             Instruction::Mret => "mret".to_owned(),
             Instruction::Sret => "sret".to_owned(),
             Instruction::Wfi => "wfi".to_owned(),
+            Instruction::SinvalVma { rs1, rs2 } => {
+                format!("sinval.vma {},{}", abi_name(rs1), abi_name(rs2))
+            }
+            Instruction::SfenceWInval => "sfence.w.inval".to_owned(),
+            Instruction::SfenceInvalIr => "sfence.inval.ir".to_owned(),
             Instruction::SfenceVma { rs1, rs2 } => {
                 format!("sfence.vma {},{}", abi_name(rs1), abi_name(rs2))
             }
@@ -2967,8 +2981,32 @@ mod tests {
     fn privileged_control_instructions_round_trip() {
         assert_eq!(decode(inst::MATCH_SRET), Ok(Instruction::Sret));
         assert_eq!(decode(inst::MATCH_WFI), Ok(Instruction::Wfi));
+        assert_eq!(
+            decode(inst::MATCH_SINVAL_VMA),
+            Ok(Instruction::SinvalVma { rs1: 0, rs2: 0 })
+        );
+        assert_eq!(
+            decode(inst::MATCH_SFENCE_W_INVAL),
+            Ok(Instruction::SfenceWInval)
+        );
+        assert_eq!(
+            decode(inst::MATCH_SFENCE_INVAL_IR),
+            Ok(Instruction::SfenceInvalIr)
+        );
         assert_eq!(render(inst::MATCH_SRET).unwrap(), "sret");
         assert_eq!(render(inst::MATCH_WFI).unwrap(), "wfi");
+        assert_eq!(
+            render(inst::MATCH_SINVAL_VMA).unwrap(),
+            "sinval.vma zero,zero"
+        );
+        assert_eq!(
+            render(inst::MATCH_SFENCE_W_INVAL).unwrap(),
+            "sfence.w.inval"
+        );
+        assert_eq!(
+            render(inst::MATCH_SFENCE_INVAL_IR).unwrap(),
+            "sfence.inval.ir"
+        );
     }
 
     #[test]

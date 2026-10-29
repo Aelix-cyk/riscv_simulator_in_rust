@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use riscv_simulator_in_rust::bus::Bus;
+use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::machine::{Machine, StepOptions};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
@@ -108,7 +108,7 @@ pub fn run_elf(elf: &Path) -> TestOutcome {
     let program = ExtractedProgram::new(elf);
     let mut memory = Memory::new();
     memory
-        .load_bytes(DRAM_BASE, &program.binary)
+        .load_bytes(DRAM_BASE, &program.binary, MemoryType::Cacheable)
         .unwrap_or_else(|trap| panic!("cannot load {}: {trap:?}", elf.display()));
     let mut machine = Machine::new(memory);
     machine.cpu_mut().set_pc(program.entry);
@@ -118,7 +118,7 @@ pub fn run_elf(elf: &Path) -> TestOutcome {
         machine.step(StepOptions::default());
         let tohost = machine
             .bus_mut()
-            .read_u64(program.tohost)
+            .read_u64(program.tohost, MemoryType::Cacheable)
             .unwrap_or_else(|trap| panic!("cannot read tohost for {}: {trap:?}", elf.display()));
         if tohost != 0 {
             return if tohost == 1 {

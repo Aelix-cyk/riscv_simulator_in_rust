@@ -3,7 +3,7 @@
 #[path = "support/assemble.rs"]
 mod assemble;
 
-use riscv_simulator_in_rust::bus::Bus;
+use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::cpu::ABI_NAMES;
 use riscv_simulator_in_rust::machine::{Machine, RunOutcome};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
@@ -15,7 +15,7 @@ fn sv39_fixture_matches_spike() {
     machine.cpu_mut().set_pc(assemble::LOAD_ADDRESS);
     machine
         .bus_mut()
-        .load_bytes(DRAM_BASE, &program.binary)
+        .load_bytes(DRAM_BASE, &program.binary, MemoryType::Cacheable)
         .unwrap();
 
     assert_eq!(machine.run(10_000), RunOutcome::Halted);
@@ -32,7 +32,10 @@ fn sv39_fixture_matches_spike() {
     for (offset, expected) in spike.memory.iter().enumerate() {
         let address = assemble::LOAD_ADDRESS + offset as u64;
         assert_eq!(
-            machine.bus_mut().read_u8(address).unwrap(),
+            machine
+                .bus_mut()
+                .read_u8(address, MemoryType::Cacheable)
+                .unwrap(),
             *expected,
             "memory at {address:#x}"
         );

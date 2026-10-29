@@ -1,6 +1,6 @@
 //! Flat, little-endian main memory.
 
-use crate::bus::Bus;
+use crate::bus::{Bus, MemoryType};
 use crate::trap::Trap;
 
 /// Base address of main memory, the conventional RISC-V DRAM base.
@@ -66,43 +66,68 @@ impl Default for Memory {
 }
 
 impl Bus for Memory {
-    fn read_u8(&mut self, address: u64) -> Result<u8, Trap> {
+    fn read_u8(&mut self, address: u64, _memory_type: MemoryType) -> Result<u8, Trap> {
         self.read_bytes::<1>(address).map(|bytes| bytes[0])
     }
 
-    fn write_u8(&mut self, address: u64, value: u8) -> Result<(), Trap> {
+    fn write_u8(&mut self, address: u64, value: u8, _memory_type: MemoryType) -> Result<(), Trap> {
         self.write_bytes::<1>(address, [value])
     }
 
-    fn read_u16(&mut self, address: u64) -> Result<u16, Trap> {
+    fn read_u16(&mut self, address: u64, _memory_type: MemoryType) -> Result<u16, Trap> {
         self.read_bytes::<2>(address).map(u16::from_le_bytes)
     }
 
-    fn write_u16(&mut self, address: u64, value: u16) -> Result<(), Trap> {
+    fn write_u16(
+        &mut self,
+        address: u64,
+        value: u16,
+        _memory_type: MemoryType,
+    ) -> Result<(), Trap> {
         self.write_bytes::<2>(address, value.to_le_bytes())
     }
 
-    fn read_u32(&mut self, address: u64) -> Result<u32, Trap> {
+    fn read_u32(&mut self, address: u64, _memory_type: MemoryType) -> Result<u32, Trap> {
         self.read_bytes::<4>(address).map(u32::from_le_bytes)
     }
 
-    fn write_u32(&mut self, address: u64, value: u32) -> Result<(), Trap> {
+    fn write_u32(
+        &mut self,
+        address: u64,
+        value: u32,
+        _memory_type: MemoryType,
+    ) -> Result<(), Trap> {
         self.write_bytes::<4>(address, value.to_le_bytes())
     }
 
-    fn read_u64(&mut self, address: u64) -> Result<u64, Trap> {
+    fn read_u64(&mut self, address: u64, _memory_type: MemoryType) -> Result<u64, Trap> {
         self.read_bytes::<8>(address).map(u64::from_le_bytes)
     }
 
-    fn write_u64(&mut self, address: u64, value: u64) -> Result<(), Trap> {
+    fn write_u64(
+        &mut self,
+        address: u64,
+        value: u64,
+        _memory_type: MemoryType,
+    ) -> Result<(), Trap> {
         self.write_bytes::<8>(address, value.to_le_bytes())
     }
 
-    fn check_write(&mut self, address: u64, width: u64) -> Result<(), Trap> {
+    fn check_write(
+        &mut self,
+        address: u64,
+        width: u64,
+        _memory_type: MemoryType,
+    ) -> Result<(), Trap> {
         self.offset(address, width).map(|_| ())
     }
 
-    fn load_bytes(&mut self, address: u64, bytes: &[u8]) -> Result<(), Trap> {
+    fn load_bytes(
+        &mut self,
+        address: u64,
+        bytes: &[u8],
+        _memory_type: MemoryType,
+    ) -> Result<(), Trap> {
         // Check the whole span before copying so a fault leaves memory untouched.
         let offset = self.offset(address, bytes.len() as u64)?;
         self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
@@ -120,34 +145,59 @@ mod tests {
     fn byte_round_trips() {
         let mut memory = Memory::new();
 
-        memory.write_u8(DRAM_BASE, 0xab).unwrap();
+        memory
+            .write_u8(DRAM_BASE, 0xab, MemoryType::Cacheable)
+            .unwrap();
 
-        assert_eq!(memory.read_u8(DRAM_BASE).unwrap(), 0xab);
+        assert_eq!(
+            memory.read_u8(DRAM_BASE, MemoryType::Cacheable).unwrap(),
+            0xab
+        );
     }
 
     #[test]
     fn halfword_is_little_endian() {
         let mut memory = Memory::new();
 
-        memory.write_u16(DRAM_BASE, 0x1234).unwrap();
+        memory
+            .write_u16(DRAM_BASE, 0x1234, MemoryType::Cacheable)
+            .unwrap();
 
-        assert_eq!(memory.read_u8(DRAM_BASE).unwrap(), 0x34);
-        assert_eq!(memory.read_u8(DRAM_BASE + 1).unwrap(), 0x12);
-        assert_eq!(memory.read_u16(DRAM_BASE).unwrap(), 0x1234);
+        assert_eq!(
+            memory.read_u8(DRAM_BASE, MemoryType::Cacheable).unwrap(),
+            0x34
+        );
+        assert_eq!(
+            memory
+                .read_u8(DRAM_BASE + 1, MemoryType::Cacheable)
+                .unwrap(),
+            0x12
+        );
+        assert_eq!(
+            memory.read_u16(DRAM_BASE, MemoryType::Cacheable).unwrap(),
+            0x1234
+        );
     }
 
     #[test]
     fn word_and_doubleword_round_trip() {
         let mut memory = Memory::new();
 
-        memory.write_u32(DRAM_BASE, 0xdead_beef).unwrap();
         memory
-            .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef)
+            .write_u32(DRAM_BASE, 0xdead_beef, MemoryType::Cacheable)
+            .unwrap();
+        memory
+            .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef, MemoryType::Cacheable)
             .unwrap();
 
-        assert_eq!(memory.read_u32(DRAM_BASE).unwrap(), 0xdead_beef);
         assert_eq!(
-            memory.read_u64(DRAM_BASE + 8).unwrap(),
+            memory.read_u32(DRAM_BASE, MemoryType::Cacheable).unwrap(),
+            0xdead_beef
+        );
+        assert_eq!(
+            memory
+                .read_u64(DRAM_BASE + 8, MemoryType::Cacheable)
+                .unwrap(),
             0x0123_4567_89ab_cdef
         );
     }
@@ -157,14 +207,21 @@ mod tests {
         let mut memory = Memory::new();
 
         memory
-            .write_u64(DRAM_BASE + 1, 0x8877_6655_4433_2211)
+            .write_u64(DRAM_BASE + 1, 0x8877_6655_4433_2211, MemoryType::Cacheable)
             .unwrap();
 
         assert_eq!(
-            memory.read_u64(DRAM_BASE + 1).unwrap(),
+            memory
+                .read_u64(DRAM_BASE + 1, MemoryType::Cacheable)
+                .unwrap(),
             0x8877_6655_4433_2211
         );
-        assert_eq!(memory.read_u8(DRAM_BASE + 1).unwrap(), 0x11);
+        assert_eq!(
+            memory
+                .read_u8(DRAM_BASE + 1, MemoryType::Cacheable)
+                .unwrap(),
+            0x11
+        );
     }
 
     #[test]
@@ -172,34 +229,55 @@ mod tests {
         let mut memory = Memory::new();
 
         memory
-            .load_bytes(DRAM_BASE, &[0x13, 0x05, 0x10, 0x00])
+            .load_bytes(DRAM_BASE, &[0x13, 0x05, 0x10, 0x00], MemoryType::Cacheable)
             .unwrap();
 
-        assert_eq!(memory.read_u32(DRAM_BASE).unwrap(), 0x0010_0513);
+        assert_eq!(
+            memory.read_u32(DRAM_BASE, MemoryType::Cacheable).unwrap(),
+            0x0010_0513
+        );
     }
 
     #[test]
     fn reads_below_dram_fault() {
         let mut memory = Memory::new();
 
-        assert_eq!(memory.read_u8(DRAM_BASE - 1), Err(Trap::AccessFault));
+        assert_eq!(
+            memory.read_u8(DRAM_BASE - 1, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
     }
 
     #[test]
     fn reads_past_end_fault() {
         let mut memory = Memory::new();
 
-        assert_eq!(memory.read_u8(LAST_BYTE).map(|_| ()), Ok(()));
-        assert_eq!(memory.read_u8(LAST_BYTE + 1), Err(Trap::AccessFault));
-        assert_eq!(memory.read_u32(LAST_BYTE), Err(Trap::AccessFault));
+        assert_eq!(
+            memory.read_u8(LAST_BYTE, MemoryType::Cacheable).map(|_| ()),
+            Ok(())
+        );
+        assert_eq!(
+            memory.read_u8(LAST_BYTE + 1, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(
+            memory.read_u32(LAST_BYTE, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
     }
 
     #[test]
     fn writes_past_end_fault() {
         let mut memory = Memory::new();
 
-        assert_eq!(memory.write_u8(LAST_BYTE + 1, 0), Err(Trap::AccessFault));
-        assert_eq!(memory.write_u64(LAST_BYTE - 3, 0), Err(Trap::AccessFault));
+        assert_eq!(
+            memory.write_u8(LAST_BYTE + 1, 0, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(
+            memory.write_u64(LAST_BYTE - 3, 0, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
     }
 
     #[test]
@@ -207,7 +285,7 @@ mod tests {
         let mut memory = Memory::new();
 
         assert_eq!(
-            memory.load_bytes(LAST_BYTE, &[0, 1]),
+            memory.load_bytes(LAST_BYTE, &[0, 1], MemoryType::Cacheable),
             Err(Trap::AccessFault)
         );
     }
@@ -215,33 +293,63 @@ mod tests {
     #[test]
     fn check_write_checks_the_entire_span_without_mutating_memory() {
         let mut memory = Memory::with_size(16);
-        memory.write_u64(DRAM_BASE + 8, u64::MAX).unwrap();
+        memory
+            .write_u64(DRAM_BASE + 8, u64::MAX, MemoryType::Cacheable)
+            .unwrap();
 
-        memory.check_write(DRAM_BASE + 8, 8).unwrap();
-        assert_eq!(memory.read_u64(DRAM_BASE + 8).unwrap(), u64::MAX);
+        memory
+            .check_write(DRAM_BASE + 8, 8, MemoryType::Cacheable)
+            .unwrap();
         assert_eq!(
-            memory.check_write(DRAM_BASE + 8, 16),
+            memory
+                .read_u64(DRAM_BASE + 8, MemoryType::Cacheable)
+                .unwrap(),
+            u64::MAX
+        );
+        assert_eq!(
+            memory.check_write(DRAM_BASE + 8, 16, MemoryType::Cacheable),
             Err(Trap::AccessFault)
         );
-        assert_eq!(memory.read_u64(DRAM_BASE + 8).unwrap(), u64::MAX);
+        assert_eq!(
+            memory
+                .read_u64(DRAM_BASE + 8, MemoryType::Cacheable)
+                .unwrap(),
+            u64::MAX
+        );
     }
 
     #[test]
     fn with_size_bounds_the_region() {
         let mut memory = Memory::with_size(16);
 
-        memory.write_u64(DRAM_BASE + 8, u64::MAX).unwrap();
+        memory
+            .write_u64(DRAM_BASE + 8, u64::MAX, MemoryType::Cacheable)
+            .unwrap();
 
-        assert_eq!(memory.read_u64(DRAM_BASE + 8).unwrap(), u64::MAX);
-        assert_eq!(memory.read_u8(DRAM_BASE + 16), Err(Trap::AccessFault));
+        assert_eq!(
+            memory
+                .read_u64(DRAM_BASE + 8, MemoryType::Cacheable)
+                .unwrap(),
+            u64::MAX
+        );
+        assert_eq!(
+            memory.read_u8(DRAM_BASE + 16, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
     }
 
     #[test]
     fn wide_access_near_the_top_of_the_address_space_faults() {
         let mut memory = Memory::new();
 
-        assert_eq!(memory.read_u8(u64::MAX), Err(Trap::AccessFault));
-        assert_eq!(memory.read_u64(u64::MAX - 3), Err(Trap::AccessFault));
+        assert_eq!(
+            memory.read_u8(u64::MAX, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(
+            memory.read_u64(u64::MAX - 3, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
     }
 
     #[test]
@@ -254,8 +362,12 @@ mod tests {
         let mut memory = Memory::new();
         let bus: &mut dyn Bus = &mut memory;
 
-        bus.write_u32(DRAM_BASE, 0x0000_0013).unwrap();
+        bus.write_u32(DRAM_BASE, 0x0000_0013, MemoryType::Cacheable)
+            .unwrap();
 
-        assert_eq!(bus.read_u32(DRAM_BASE).unwrap(), 0x0000_0013);
+        assert_eq!(
+            bus.read_u32(DRAM_BASE, MemoryType::Cacheable).unwrap(),
+            0x0000_0013
+        );
     }
 }

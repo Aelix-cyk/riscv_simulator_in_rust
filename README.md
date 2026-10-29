@@ -17,7 +17,9 @@ handler through `mtvec`, or a delegated supervisor handler through `stvec`.
 Implemented CSRs include WARL `misa` (RV64IMAFDCBSU), `fcsr`/`fflags`/`frm`,
 machine and supervisor identity/status/trap/delegation registers, and counter
 controls. `satp` supports Bare and Sv39 modes with a 16-bit ASID. Sv39 uses
-4 KiB and superpage mappings, software A/D updates, and a 64-entry FIFO TLB.
+4 KiB and superpage mappings, software A/D updates, PBMT memory types, and a
+64-entry FIFO TLB. Fine-grained invalidation is provided by Svinval's
+`SINVAL.VMA`, `SFENCE.W.INVAL`, and `SFENCE.INVAL.IR`.
 HPM counters select retired instructions, loads, stores, and branches/jumps
 through one-hot event masks. The target profile is RVA22S64, built up
 progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the

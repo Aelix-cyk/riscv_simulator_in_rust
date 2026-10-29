@@ -56,8 +56,8 @@ mandatory here by reference, so these rows gate conformance too.
 | Sstvecd | `stvec.MODE` = Direct; any valid four-byte-aligned `stvec.BASE` | Fixed | |
 | Sstvala | `stval` contents on specified faults | Fixed | |
 | Sscounterenw | Writable `scounteren` bits for non-zero `hpmcounter`s | Fixed | |
-| Svpbmt | Page-based memory types | Fixed | |
-| Svinval | Fine-grained address-translation cache invalidation | Fixed | |
+| Svpbmt | Page-based memory types | Implemented | PMA/default, non-cacheable, and I/O types; PBMT=3 faults |
+| Svinval | Fine-grained address-translation cache invalidation | Implemented | `SINVAL.VMA`, `SFENCE.W.INVAL`, and `SFENCE.INVAL.IR` |
 
 ## 2. Optional unprivileged extensions
 
@@ -87,7 +87,7 @@ mandatory here by reference, so these rows gate conformance too.
 |---|---|---|---|
 | Cache geometry and coherence | No cache model | Implemented | 64-byte, naturally aligned architectural blocks |
 | PMP entries and granularity | | Undecided | |
-| PMA regions and attributes | | Undecided | |
+| PMA regions and attributes | One implicit cacheable region accepting PBMT NC/I/O overrides | Implemented | |
 | Interrupt controller | | Undecided | |
 | Timer facility | | Undecided | |
 | Misaligned access outside cacheable, coherent main memory | | Undecided | Zicclsm already mandates main-memory support; this row covers other regions and performance |

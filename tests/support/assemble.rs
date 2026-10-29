@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use riscv_simulator_in_rust::bus::Bus;
+use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::cpu::{ABI_NAMES, FPR_COUNT, GPR_COUNT};
 use riscv_simulator_in_rust::decode::is_compressed;
 
@@ -45,11 +45,14 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Reads a 16- or 32-bit instruction word, zero-extending compressed words.
 pub fn instruction_word(bus: &mut dyn Bus, address: u64) -> u32 {
-    let low = bus.read_u16(address).expect("read instruction low half");
+    let low = bus
+        .read_u16(address, MemoryType::Cacheable)
+        .expect("read instruction low half");
     if is_compressed(u32::from(low)) {
         u32::from(low)
     } else {
-        bus.read_u32(address).expect("read 32-bit instruction")
+        bus.read_u32(address, MemoryType::Cacheable)
+            .expect("read 32-bit instruction")
     }
 }
 

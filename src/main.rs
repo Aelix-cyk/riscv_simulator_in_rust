@@ -3,7 +3,7 @@
 use std::fs;
 use std::process::ExitCode;
 
-use riscv_simulator_in_rust::bus::Bus;
+use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::cli::{self, Command, Options, USAGE};
 use riscv_simulator_in_rust::cpu::{ABI_NAMES, Cpu, FPR_COUNT};
 use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
@@ -50,7 +50,10 @@ fn run(options: &Options) -> ExitCode {
 
     let mut machine = Machine::new(Memory::new());
     machine.cpu_mut().set_pc(DRAM_BASE);
-    if let Err(trap) = machine.bus_mut().load_bytes(DRAM_BASE, &binary) {
+    if let Err(trap) = machine
+        .bus_mut()
+        .load_bytes(DRAM_BASE, &binary, MemoryType::Cacheable)
+    {
         eprintln!("cannot load {}: {trap:?}", options.binary.display());
         return ExitCode::from(EXIT_USAGE);
     }

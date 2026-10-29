@@ -41,6 +41,8 @@ implemented_extensions:
   - { name: Sv39, version: "= 1.0.0" }
   - { name: Svade, version: "= 1.0.0" }
   - { name: Svbare, version: "= 1.0.0" }
+  - { name: Svinval, version: "= 1.0.0" }
+  - { name: Svpbmt, version: "= 1.0.0" }
   - { name: Sm, version: "= 1.12.0" }
 
 params:
@@ -48,7 +50,7 @@ params:
   MISALIGNED_AMO: false
   LRSC_RESERVATION_STRATEGY: custom
   LRSC_FAIL_ON_VA_SYNONYM: false
-  LRSC_MISALIGNED_BEHAVIOR: always raise misaligned exception
+  LRSC_MISALIGNED_BEHAVIOR: always raise access fault
   LRSC_FAIL_ON_NON_EXACT_LRSC: false
   MUTABLE_MISA_A: false
   MUTABLE_MISA_C: false

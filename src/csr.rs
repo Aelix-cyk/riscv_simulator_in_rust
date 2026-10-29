@@ -120,8 +120,10 @@ const MENVCFG_CBIE_MASK: u64 = 0b11 << MENVCFG_CBIE_SHIFT;
 const MENVCFG_CBIE_RESERVED: u64 = 0b10 << MENVCFG_CBIE_SHIFT;
 const MENVCFG_CBCFE: u64 = 1 << 6;
 const MENVCFG_CBZE: u64 = 1 << 7;
-const MENVCFG_WRITABLE: u64 = MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE;
-const SENVCFG_WRITABLE: u64 = MENVCFG_WRITABLE;
+const MENVCFG_PBMTE_SHIFT: u32 = 62;
+const MENVCFG_PBMTE: u64 = 1 << MENVCFG_PBMTE_SHIFT;
+const MENVCFG_WRITABLE: u64 = MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE | MENVCFG_PBMTE;
+const SENVCFG_WRITABLE: u64 = MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE;
 const SATP_MODE_SHIFT: u32 = 60;
 const SATP_MODE_MASK: u64 = 0xf << SATP_MODE_SHIFT;
 const SATP_SV39_MODE: u64 = 8;
@@ -408,7 +410,7 @@ impl Csrs {
         } else {
             cbie
         };
-        canonical_cbie | (value & (MENVCFG_CBCFE | MENVCFG_CBZE))
+        canonical_cbie | (value & (MENVCFG_CBCFE | MENVCFG_CBZE | MENVCFG_PBMTE))
     }
 
     fn mstatus_writable(value: u64) -> u64 {
@@ -470,6 +472,11 @@ impl Csrs {
 
     pub(crate) fn mxr(self) -> bool {
         self.mstatus & MSTATUS_MXR != 0
+    }
+
+    /// Whether page-based memory types are enabled for translated accesses.
+    pub(crate) fn pbmt_enabled(self) -> bool {
+        self.menvcfg & MENVCFG_PBMTE != 0
     }
 
     /// Effective privilege for an explicit load/store, honoring `MPRV`.
@@ -1097,8 +1104,9 @@ mod tests {
         assert!(csrs.write(inst::CSR_MENVCFG, u64::MAX));
         assert_eq!(
             csrs.read(inst::CSR_MENVCFG),
-            Some(MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE)
+            Some(MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE | MENVCFG_PBMTE)
         );
+        assert!(csrs.pbmt_enabled());
         assert!(csrs.supervisor_cache_block_invalidate_enabled());
         assert!(csrs.supervisor_cache_block_clean_flush_enabled());
         assert!(csrs.supervisor_cache_block_zero_enabled());
@@ -1110,9 +1118,14 @@ mod tests {
         assert!(csrs.user_cache_block_invalidate_enabled());
         assert!(csrs.user_cache_block_clean_flush_enabled());
         assert!(csrs.user_cache_block_zero_enabled());
+        assert_eq!(
+            csrs.read(inst::CSR_SENVCFG),
+            Some(MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE)
+        );
 
         assert!(csrs.write(inst::CSR_MENVCFG, 0b10 << MENVCFG_CBIE_SHIFT));
         assert_eq!(csrs.read(inst::CSR_MENVCFG), Some(0));
+        assert!(!csrs.pbmt_enabled());
         assert!(!csrs.supervisor_cache_block_invalidate_enabled());
         assert!(!csrs.supervisor_cache_block_clean_flush_enabled());
         assert!(!csrs.supervisor_cache_block_zero_enabled());

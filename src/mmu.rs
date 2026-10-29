@@ -1,6 +1,6 @@
 //! Sv39 address translation and the architectural translation cache model.
 
-use crate::bus::Bus;
+use crate::bus::{Bus, MemoryType};
 use crate::cpu::PrivilegeMode;
 
 const PAGE_BITS: u32 = 12;
@@ -21,7 +21,9 @@ const PTE_ACCESSED: u64 = 1 << 6;
 const PTE_DIRTY: u64 = 1 << 7;
 const PTE_PPN_SHIFT: u32 = 10;
 const PTE_PPN_MASK: u64 = (1 << 44) - 1;
-const PTE_RESERVED_MASK: u64 = ((1 << 10) - 1) << 54;
+const PTE_PBMT_SHIFT: u32 = 61;
+const PTE_PBMT_MASK: u64 = 0b11 << PTE_PBMT_SHIFT;
+const PTE_RESERVED_MASK: u64 = ((1 << 10) - 1) << 54 & !PTE_PBMT_MASK;
 const PTE_BYTES: u64 = 8;
 const VPN_INDEX_MASK: u64 = (1 << VPN_BITS_PER_LEVEL) - 1;
 const ASID_MASK: u64 = SATP_ASID_MASK;
@@ -57,6 +59,14 @@ pub(crate) struct Config {
     pub(crate) privilege: PrivilegeMode,
     pub(crate) sum: bool,
     pub(crate) mxr: bool,
+    pub(crate) pbmt_enabled: bool,
+}
+
+/// Physical address and attributes produced by one translation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Translation {
+    pub(crate) address: u64,
+    pub(crate) memory_type: MemoryType,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +83,7 @@ struct TlbEntry {
     user: bool,
     accessed: bool,
     dirty: bool,
+    memory_type: MemoryType,
 }
 
 impl TlbEntry {
@@ -89,6 +100,7 @@ impl TlbEntry {
         user: false,
         accessed: false,
         dirty: false,
+        memory_type: MemoryType::Cacheable,
     };
 
     fn matches(self, virtual_address: u64, asid: u64) -> bool {
@@ -103,6 +115,8 @@ impl TlbEntry {
 pub(crate) struct Mmu {
     entries: [TlbEntry; TLB_ENTRY_COUNT],
     replace: usize,
+    writes_ordered_for_invalidation: bool,
+    invalidations_ordered_for_implicit_reads: bool,
 }
 
 impl Default for Mmu {
@@ -110,6 +124,8 @@ impl Default for Mmu {
         Self {
             entries: [TlbEntry::EMPTY; TLB_ENTRY_COUNT],
             replace: 0,
+            writes_ordered_for_invalidation: false,
+            invalidations_ordered_for_implicit_reads: false,
         }
     }
 }
@@ -122,10 +138,13 @@ impl Mmu {
         config: Config,
         virtual_address: u64,
         access: Access,
-    ) -> Result<u64, Fault> {
+    ) -> Result<Translation, Fault> {
         let mode = (config.satp >> SATP_MODE_SHIFT) & 0xf;
         if config.privilege == PrivilegeMode::Machine || mode == 0 {
-            return Ok(virtual_address);
+            return Ok(Translation {
+                address: virtual_address,
+                memory_type: MemoryType::Cacheable,
+            });
         }
         if mode != SV39_MODE || !canonical_sv39(virtual_address) {
             return Err(fault(access, FaultKind::Page));
@@ -140,17 +159,48 @@ impl Mmu {
         {
             entry
         } else {
-            self.insert(walk(bus, config.satp, virtual_address, access)?)
+            self.insert(walk(bus, config, virtual_address, access)?)
         };
 
         if !permits(entry, config, access) {
             return Err(fault(access, FaultKind::Page));
         }
-        Ok(entry.physical_page | (virtual_address & (entry.page_bytes - 1)))
+        Ok(Translation {
+            address: entry.physical_page | (virtual_address & (entry.page_bytes - 1)),
+            memory_type: entry.memory_type,
+        })
     }
 
     /// Invalidates cached mappings selected by an `SFENCE.VMA` operation.
     pub(crate) fn sfence_vma(&mut self, virtual_address: Option<u64>, asid: Option<u64>) {
+        self.invalidate_vma(virtual_address, asid);
+        self.writes_ordered_for_invalidation = true;
+        self.invalidations_ordered_for_implicit_reads = true;
+    }
+
+    /// Invalidates cached mappings without the ordering guarantees of
+    /// `SFENCE.VMA`.
+    pub(crate) fn sinval_vma(&mut self, virtual_address: Option<u64>, asid: Option<u64>) {
+        self.invalidate_vma(virtual_address, asid);
+        self.invalidations_ordered_for_implicit_reads = false;
+    }
+
+    /// Orders prior explicit writes before later invalidation operations.
+    pub(crate) fn sfence_w_inval(&mut self) {
+        self.writes_ordered_for_invalidation = true;
+    }
+
+    /// Orders prior invalidation effects before later implicit reads.
+    pub(crate) fn sfence_inval_ir(&mut self) {
+        self.invalidations_ordered_for_implicit_reads = true;
+    }
+
+    /// Records an explicit write that later ordered invalidations must observe.
+    pub(crate) fn note_explicit_write(&mut self) {
+        self.writes_ordered_for_invalidation = false;
+    }
+
+    fn invalidate_vma(&mut self, virtual_address: Option<u64>, asid: Option<u64>) {
         for entry in &mut self.entries {
             let address_matches = !entry.valid
                 || virtual_address.is_none_or(|address| {
@@ -173,18 +223,18 @@ impl Mmu {
 
 fn walk<B: Bus>(
     bus: &mut B,
-    satp: u64,
+    config: Config,
     virtual_address: u64,
     access: Access,
 ) -> Result<TlbEntry, Fault> {
-    let asid = (satp >> SATP_ASID_SHIFT) & ASID_MASK;
-    let mut table = satp & PTE_PPN_MASK;
+    let asid = (config.satp >> SATP_ASID_SHIFT) & ASID_MASK;
+    let mut table = config.satp & PTE_PPN_MASK;
     let mut global = false;
     for level in (0..SV39_LEVELS).rev() {
         let index = vpn_index(virtual_address, level);
         let address = (table << PAGE_BITS).wrapping_add(index * PTE_BYTES);
         let pte = bus
-            .read_u64(address)
+            .read_u64(address, MemoryType::Cacheable)
             .map_err(|_| fault(access, FaultKind::Access))?;
         if pte & PTE_VALID == 0 || pte & PTE_RESERVED_MASK != 0 {
             return Err(fault(access, FaultKind::Page));
@@ -192,11 +242,15 @@ fn walk<B: Bus>(
         let readable = pte & PTE_READ != 0;
         let writable = pte & PTE_WRITE != 0;
         let executable = pte & PTE_EXECUTE != 0;
+        let pbmt = (pte & PTE_PBMT_MASK) >> PTE_PBMT_SHIFT;
         if writable && !readable {
             return Err(fault(access, FaultKind::Page));
         }
         global |= pte & PTE_GLOBAL != 0;
         if readable || executable {
+            if pbmt == 3 || (pbmt != 0 && !config.pbmt_enabled) {
+                return Err(fault(access, FaultKind::Page));
+            }
             let ppn = (pte >> PTE_PPN_SHIFT) & PTE_PPN_MASK;
             if superpage_ppn_misaligned(ppn, level) {
                 return Err(fault(access, FaultKind::Page));
@@ -215,10 +269,16 @@ fn walk<B: Bus>(
                 user: pte & PTE_USER != 0,
                 accessed: pte & PTE_ACCESSED != 0,
                 dirty: pte & PTE_DIRTY != 0,
+                memory_type: match pbmt {
+                    0 => MemoryType::Cacheable,
+                    1 => MemoryType::NonCacheable,
+                    2 => MemoryType::Io,
+                    _ => unreachable!("reserved PBMT value was rejected"),
+                },
             };
             return Ok(entry);
         }
-        if pte & (PTE_USER | PTE_ACCESSED | PTE_DIRTY) != 0 {
+        if pte & (PTE_USER | PTE_ACCESSED | PTE_DIRTY) != 0 || pbmt != 0 {
             return Err(fault(access, FaultKind::Page));
         }
         table = (pte >> PTE_PPN_SHIFT) & PTE_PPN_MASK;
@@ -299,6 +359,13 @@ mod tests {
         ((address >> PAGE_BITS) << PTE_PPN_SHIFT) | flags
     }
 
+    fn translation(address: u64) -> Translation {
+        Translation {
+            address,
+            memory_type: MemoryType::Cacheable,
+        }
+    }
+
     fn config(asid: u64) -> Config {
         Config {
             satp: (SV39_MODE << SATP_MODE_SHIFT)
@@ -307,17 +374,28 @@ mod tests {
             privilege: PrivilegeMode::Supervisor,
             sum: false,
             mxr: false,
+            pbmt_enabled: false,
         }
     }
 
     fn install_4k_mapping(memory: &mut Memory, leaf: u64) {
         memory
-            .write_u64(ROOT_TABLE, pte(LEVEL_1_TABLE, PTE_NONLEAF))
+            .write_u64(
+                ROOT_TABLE,
+                pte(LEVEL_1_TABLE, PTE_NONLEAF),
+                MemoryType::Cacheable,
+            )
             .unwrap();
         memory
-            .write_u64(LEVEL_1_TABLE, pte(LEVEL_0_TABLE, PTE_NONLEAF))
+            .write_u64(
+                LEVEL_1_TABLE,
+                pte(LEVEL_0_TABLE, PTE_NONLEAF),
+                MemoryType::Cacheable,
+            )
             .unwrap();
-        memory.write_u64(LEVEL_0_TABLE + 8, leaf).unwrap();
+        memory
+            .write_u64(LEVEL_0_TABLE + 8, leaf, MemoryType::Cacheable)
+            .unwrap();
     }
 
     #[test]
@@ -329,11 +407,12 @@ mod tests {
             privilege: PrivilegeMode::Supervisor,
             sum: false,
             mxr: false,
+            pbmt_enabled: false,
         };
 
         assert_eq!(
             mmu.translate(&mut memory, config, DATA_PAGE + 7, Access::Load),
-            Ok(DATA_PAGE + 7)
+            Ok(translation(DATA_PAGE + 7))
         );
     }
 
@@ -350,7 +429,7 @@ mod tests {
                 TEST_VA + TEST_OFFSET,
                 Access::Store
             ),
-            Ok(DATA_PAGE + TEST_OFFSET)
+            Ok(translation(DATA_PAGE + TEST_OFFSET))
         );
         assert_eq!(
             mmu.translate(
@@ -359,7 +438,7 @@ mod tests {
                 TEST_VA + TEST_OFFSET,
                 Access::Fetch
             ),
-            Ok(DATA_PAGE + TEST_OFFSET)
+            Ok(translation(DATA_PAGE + TEST_OFFSET))
         );
     }
 
@@ -382,7 +461,7 @@ mod tests {
         config.mxr = true;
         assert_eq!(
             mmu.translate(&mut memory, config, TEST_VA, Access::Load),
-            Ok(DATA_PAGE)
+            Ok(translation(DATA_PAGE))
         );
         config.mxr = false;
         config.privilege = PrivilegeMode::Supervisor;
@@ -432,20 +511,101 @@ mod tests {
     fn sv39_supports_aligned_superpages_and_rejects_misaligned_ones() {
         let mut memory = Memory::with_size(MEMORY_BYTES);
         let leaf = pte(DRAM_BASE, PTE_LEAF);
-        memory.write_u64(ROOT_TABLE, leaf).unwrap();
+        memory
+            .write_u64(ROOT_TABLE, leaf, MemoryType::Cacheable)
+            .unwrap();
         let mut mmu = Mmu::default();
 
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_OFFSET, Access::Load),
-            Ok(DRAM_BASE + TEST_OFFSET)
+            Ok(translation(DRAM_BASE + TEST_OFFSET))
         );
 
         memory
-            .write_u64(ROOT_TABLE, leaf | (1 << PTE_PPN_SHIFT))
+            .write_u64(
+                ROOT_TABLE,
+                leaf | (1 << PTE_PPN_SHIFT),
+                MemoryType::Cacheable,
+            )
             .unwrap();
         mmu.sfence_vma(None, None);
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_OFFSET, Access::Load),
+            Err(Fault {
+                access: Access::Load,
+                kind: FaultKind::Page
+            })
+        );
+    }
+
+    #[test]
+    fn svpbmt_translates_memory_types_and_validates_encodings() {
+        let mut memory = Memory::with_size(MEMORY_BYTES);
+        let mut mmu = Mmu::default();
+        let mut pbmt_config = config(ASID_ONE);
+
+        install_4k_mapping(
+            &mut memory,
+            pte(DATA_PAGE, PTE_LEAF | (2 << PTE_PBMT_SHIFT)),
+        );
+        assert_eq!(
+            mmu.translate(&mut memory, pbmt_config, TEST_VA, Access::Load),
+            Err(Fault {
+                access: Access::Load,
+                kind: FaultKind::Page
+            })
+        );
+
+        pbmt_config.pbmt_enabled = true;
+        assert_eq!(
+            mmu.translate(&mut memory, pbmt_config, TEST_VA, Access::Load),
+            Ok(Translation {
+                address: DATA_PAGE,
+                memory_type: MemoryType::Io,
+            })
+        );
+
+        install_4k_mapping(
+            &mut memory,
+            pte(DATA_PAGE, PTE_LEAF | (1 << PTE_PBMT_SHIFT)),
+        );
+        mmu.sfence_vma(None, None);
+        assert_eq!(
+            mmu.translate(&mut memory, pbmt_config, TEST_VA, Access::Load),
+            Ok(Translation {
+                address: DATA_PAGE,
+                memory_type: MemoryType::NonCacheable,
+            })
+        );
+
+        install_4k_mapping(&mut memory, pte(DATA_PAGE, PTE_LEAF | PTE_PBMT_MASK));
+        mmu.sfence_vma(None, None);
+        assert_eq!(
+            mmu.translate(&mut memory, pbmt_config, TEST_VA, Access::Load),
+            Err(Fault {
+                access: Access::Load,
+                kind: FaultKind::Page
+            })
+        );
+    }
+
+    #[test]
+    fn svpbmt_rejects_nonzero_pbmt_on_nonleaf_entries() {
+        let mut memory = Memory::with_size(MEMORY_BYTES);
+        let mut mmu = Mmu::default();
+        let mut pbmt_config = config(ASID_ONE);
+        pbmt_config.pbmt_enabled = true;
+
+        memory
+            .write_u64(
+                ROOT_TABLE,
+                pte(LEVEL_1_TABLE, PTE_NONLEAF | (1 << PTE_PBMT_SHIFT)),
+                MemoryType::Cacheable,
+            )
+            .unwrap();
+
+        assert_eq!(
+            mmu.translate(&mut memory, pbmt_config, TEST_VA, Access::Load),
             Err(Fault {
                 access: Access::Load,
                 kind: FaultKind::Page
@@ -469,7 +629,7 @@ mod tests {
                 TEST_VA,
                 Access::CacheManagement
             ),
-            Ok(DATA_PAGE)
+            Ok(translation(DATA_PAGE))
         );
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Store),
@@ -491,7 +651,7 @@ mod tests {
                 TEST_VA,
                 Access::CacheManagement
             ),
-            Ok(DATA_PAGE)
+            Ok(translation(DATA_PAGE))
         );
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Store),
@@ -510,23 +670,57 @@ mod tests {
 
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Load),
-            Ok(DATA_PAGE)
+            Ok(translation(DATA_PAGE))
         );
         install_4k_mapping(&mut memory, pte(SECOND_DATA_PAGE, PTE_LEAF));
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Load),
-            Ok(DATA_PAGE)
+            Ok(translation(DATA_PAGE))
         );
         mmu.sfence_vma(Some(TEST_VA), Some(ASID_TWO));
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Load),
-            Ok(DATA_PAGE)
+            Ok(translation(DATA_PAGE))
         );
         mmu.sfence_vma(Some(TEST_VA), Some(ASID_ONE));
         assert_eq!(
             mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Load),
-            Ok(SECOND_DATA_PAGE)
+            Ok(translation(SECOND_DATA_PAGE))
         );
+    }
+
+    #[test]
+    fn svinval_invalidates_without_claiming_full_fence_ordering() {
+        let mut memory = Memory::with_size(MEMORY_BYTES);
+        install_4k_mapping(&mut memory, pte(DATA_PAGE, PTE_LEAF));
+        let mut mmu = Mmu::default();
+
+        mmu.sfence_w_inval();
+        mmu.sfence_inval_ir();
+        assert_eq!(
+            mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Load),
+            Ok(translation(DATA_PAGE))
+        );
+
+        install_4k_mapping(&mut memory, pte(SECOND_DATA_PAGE, PTE_LEAF));
+        mmu.sinval_vma(None, None);
+        assert!(!mmu.invalidations_ordered_for_implicit_reads);
+        assert_eq!(
+            mmu.translate(&mut memory, config(ASID_ONE), TEST_VA, Access::Load),
+            Ok(translation(SECOND_DATA_PAGE))
+        );
+
+        mmu.sfence_w_inval();
+        mmu.sfence_inval_ir();
+        assert!(mmu.writes_ordered_for_invalidation);
+        assert!(mmu.invalidations_ordered_for_implicit_reads);
+
+        mmu.note_explicit_write();
+        assert!(!mmu.writes_ordered_for_invalidation);
+
+        mmu.sfence_vma(None, None);
+        assert!(mmu.writes_ordered_for_invalidation);
+        assert!(mmu.invalidations_ordered_for_implicit_reads);
     }
 
     #[test]

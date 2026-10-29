@@ -3,7 +3,7 @@
 #[path = "support/assemble.rs"]
 mod assemble;
 
-use riscv_simulator_in_rust::bus::Bus;
+use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::decode::decode;
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 use riscv_simulator_in_rust::trap::Trap;
@@ -52,7 +52,9 @@ fn decoder_mnemonics_match_objdump() {
 fn check_fixture(name: &str, assembler: fn(&str) -> assemble::Program) {
     let program = assembler(name);
     let mut memory = Memory::with_size(program.binary.len());
-    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
+    memory
+        .load_bytes(DRAM_BASE, &program.binary, MemoryType::Cacheable)
+        .unwrap();
 
     for line in &program.instructions {
         let address = line.address;

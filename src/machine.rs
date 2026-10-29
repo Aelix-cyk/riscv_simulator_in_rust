@@ -1,6 +1,6 @@
 //! A hart plus the bus it executes against.
 
-use crate::bus::Bus;
+use crate::bus::{Bus, MemoryType};
 use crate::cpu::{Cpu, PrivilegeMode, X0};
 use crate::csr;
 use crate::decode::{
@@ -11,7 +11,7 @@ use crate::fp::{self, RoundingMode};
 use crate::fp16;
 use crate::fp64;
 use crate::inst;
-use crate::mmu::{Access, Config as TranslationConfig, FaultKind, Mmu};
+use crate::mmu::{Access, Config as TranslationConfig, FaultKind, Mmu, Translation};
 use crate::trap::Trap;
 
 /// Smallest legal instruction width with Zca implemented.
@@ -787,14 +787,14 @@ impl<B: Bus> Machine<B> {
             }
             Instruction::LrW { rd, rs1, .. } => {
                 let address = self.gpr(rs1);
-                Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_LOAD)?;
+                Self::check_atomic_alignment(address, 4, inst::CAUSE_LOAD_ACCESS)?;
                 let value = self.bus_read_u32(address, Access::Load)?;
                 self.reservation = Some(Self::reservation_set(address));
                 self.write(rd, sign_extend_32(u64::from(value)));
             }
             Instruction::LrD { rd, rs1, .. } => {
                 let address = self.gpr(rs1);
-                Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_LOAD)?;
+                Self::check_atomic_alignment(address, 8, inst::CAUSE_LOAD_ACCESS)?;
                 let value = self.bus_read_u64(address, Access::Load)?;
                 self.reservation = Some(Self::reservation_set(address));
                 self.write(rd, value);
@@ -802,7 +802,7 @@ impl<B: Bus> Machine<B> {
             Instruction::ScW { rd, rs1, rs2, .. } => {
                 let address = self.gpr(rs1);
                 let source = self.gpr(rs2);
-                Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_STORE)?;
+                Self::check_atomic_alignment(address, 4, inst::CAUSE_STORE_ACCESS)?;
                 self.bus_check_write(address, 4, Access::Store, address)?;
                 let success = self.reservation.take() == Some(Self::reservation_set(address));
                 if success {
@@ -815,7 +815,7 @@ impl<B: Bus> Machine<B> {
             Instruction::ScD { rd, rs1, rs2, .. } => {
                 let address = self.gpr(rs1);
                 let source = self.gpr(rs2);
-                Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_STORE)?;
+                Self::check_atomic_alignment(address, 8, inst::CAUSE_STORE_ACCESS)?;
                 self.bus_check_write(address, 8, Access::Store, address)?;
                 let success = self.reservation.take() == Some(Self::reservation_set(address));
                 if success {
@@ -1044,15 +1044,22 @@ impl<B: Bus> Machine<B> {
                     ));
                 }
             }
+            Instruction::SinvalVma { rs1, rs2 } => {
+                self.require_translation_invalidation_access(word)?;
+                let virtual_address = (rs1 != X0 as u8).then(|| self.gpr(rs1));
+                let asid = (rs2 != X0 as u8).then(|| self.gpr(rs2) & SATP_ASID_MASK);
+                self.mmu.sinval_vma(virtual_address, asid);
+            }
+            Instruction::SfenceWInval => {
+                self.require_sfence_access(word)?;
+                self.mmu.sfence_w_inval();
+            }
+            Instruction::SfenceInvalIr => {
+                self.require_sfence_access(word)?;
+                self.mmu.sfence_inval_ir();
+            }
             Instruction::SfenceVma { rs1, rs2 } => {
-                if self.cpu.privilege() == PrivilegeMode::User
-                    || (self.cpu.privilege() == PrivilegeMode::Supervisor && self.cpu.csrs().tvm())
-                {
-                    return Err(Exception::new(
-                        inst::CAUSE_ILLEGAL_INSTRUCTION,
-                        u64::from(word),
-                    ));
-                }
+                self.require_translation_invalidation_access(word)?;
                 let virtual_address = (rs1 != X0 as u8).then(|| self.gpr(rs1));
                 let asid = (rs2 != X0 as u8).then(|| self.gpr(rs2) & SATP_ASID_MASK);
                 self.mmu.sfence_vma(virtual_address, asid);
@@ -1174,7 +1181,7 @@ impl<B: Bus> Machine<B> {
     ) -> Result<(), Exception> {
         let address = self.gpr(rs1);
         let source = self.gpr(rs2) as u32;
-        Self::check_atomic_alignment(address, 4, inst::CAUSE_MISALIGNED_STORE)?;
+        Self::check_atomic_alignment(address, 4, inst::CAUSE_STORE_ACCESS)?;
         let old = self.bus_read_u32(address, Access::Store)?;
         let new = apply_amo_w(old, source, operation);
         self.bus_write_u32(address, new, Access::Store)?;
@@ -1193,7 +1200,7 @@ impl<B: Bus> Machine<B> {
     ) -> Result<(), Exception> {
         let address = self.gpr(rs1);
         let source = self.gpr(rs2);
-        Self::check_atomic_alignment(address, 8, inst::CAUSE_MISALIGNED_STORE)?;
+        Self::check_atomic_alignment(address, 8, inst::CAUSE_STORE_ACCESS)?;
         let old = self.bus_read_u64(address, Access::Store)?;
         let new = apply_amo_d(old, source, operation);
         self.bus_write_u64(address, new, Access::Store)?;
@@ -1662,7 +1669,11 @@ impl<B: Bus> Machine<B> {
     }
 
     /// Translates an execution address to a physical Bus address.
-    fn translate_address(&mut self, address: u64, access: Access) -> Result<u64, Exception> {
+    fn translate_address(
+        &mut self,
+        address: u64,
+        access: Access,
+    ) -> Result<Translation, Exception> {
         let current = self.cpu.privilege();
         let explicit_access = access != Access::Fetch;
         let effective_privilege = self
@@ -1674,6 +1685,7 @@ impl<B: Bus> Machine<B> {
             privilege: effective_privilege,
             sum: self.cpu.csrs().sum(),
             mxr: self.cpu.csrs().mxr(),
+            pbmt_enabled: self.cpu.csrs().pbmt_enabled(),
         };
         self.mmu
             .translate(&mut self.bus, config, address, access)
@@ -1696,8 +1708,11 @@ impl<B: Bus> Machine<B> {
         &mut self,
         address: u64,
         access: Access,
-    ) -> Result<[u64; N], Exception> {
-        let mut physical = [0_u64; N];
+    ) -> Result<[Translation; N], Exception> {
+        let mut physical = [Translation {
+            address: 0,
+            memory_type: MemoryType::Cacheable,
+        }; N];
         for (offset, slot) in physical.iter_mut().enumerate() {
             let virtual_address = address
                 .checked_add(offset as u64)
@@ -1717,22 +1732,46 @@ impl<B: Bus> Machine<B> {
         Exception::new(cause, address)
     }
 
+    fn require_translation_invalidation_access(&self, word: u32) -> Result<(), Exception> {
+        let blocked = self.cpu.privilege() == PrivilegeMode::User
+            || (self.cpu.privilege() == PrivilegeMode::Supervisor && self.cpu.csrs().tvm());
+        if blocked {
+            Err(Exception::new(
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                u64::from(word),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn require_sfence_access(&self, word: u32) -> Result<(), Exception> {
+        if self.cpu.privilege() == PrivilegeMode::User {
+            Err(Exception::new(
+                inst::CAUSE_ILLEGAL_INSTRUCTION,
+                u64::from(word),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     fn bus_read_u8(&mut self, address: u64, access: Access) -> Result<u8, Exception> {
-        let [physical] = self.physical_addresses(address, access)?;
+        let [translation] = self.physical_addresses(address, access)?;
         self.bus
-            .read_u8(physical)
+            .read_u8(translation.address, translation.memory_type)
             .map_err(|_| self.access_exception(access, address))
     }
 
     fn bus_read_u16(&mut self, address: u64, access: Access) -> Result<u16, Exception> {
         let mut bytes = [0_u8; 2];
-        for (slot, physical) in bytes
+        for (slot, translation) in bytes
             .iter_mut()
             .zip(self.physical_addresses::<2>(address, access)?)
         {
             *slot = self
                 .bus
-                .read_u8(physical)
+                .read_u8(translation.address, translation.memory_type)
                 .map_err(|_| self.access_exception(access, address))?;
         }
         Ok(u16::from_le_bytes(bytes))
@@ -1740,13 +1779,13 @@ impl<B: Bus> Machine<B> {
 
     fn bus_read_u32(&mut self, address: u64, access: Access) -> Result<u32, Exception> {
         let mut bytes = [0_u8; 4];
-        for (slot, physical) in bytes
+        for (slot, translation) in bytes
             .iter_mut()
             .zip(self.physical_addresses::<4>(address, access)?)
         {
             *slot = self
                 .bus
-                .read_u8(physical)
+                .read_u8(translation.address, translation.memory_type)
                 .map_err(|_| self.access_exception(access, address))?;
         }
         Ok(u32::from_le_bytes(bytes))
@@ -1754,13 +1793,13 @@ impl<B: Bus> Machine<B> {
 
     fn bus_read_u64(&mut self, address: u64, access: Access) -> Result<u64, Exception> {
         let mut bytes = [0_u8; 8];
-        for (slot, physical) in bytes
+        for (slot, translation) in bytes
             .iter_mut()
             .zip(self.physical_addresses::<8>(address, access)?)
         {
             *slot = self
                 .bus
-                .read_u8(physical)
+                .read_u8(translation.address, translation.memory_type)
                 .map_err(|_| self.access_exception(access, address))?;
         }
         Ok(u64::from_le_bytes(bytes))
@@ -1788,20 +1827,23 @@ impl<B: Bus> Machine<B> {
         bytes: &[u8],
         access: Access,
     ) -> Result<(), Exception> {
-        let mut physical = Vec::with_capacity(bytes.len());
+        let mut translations = Vec::with_capacity(bytes.len());
         for offset in 0..bytes.len() {
             let virtual_address = address
                 .checked_add(offset as u64)
                 .ok_or_else(|| self.access_exception(access, address))?;
-            physical.push(self.translate_address(virtual_address, access)?);
+            translations.push(self.translate_address(virtual_address, access)?);
         }
-        for ((physical, byte), offset) in
-            physical.into_iter().zip(bytes.iter().copied()).zip(0_u64..)
+        for ((translation, byte), offset) in translations
+            .into_iter()
+            .zip(bytes.iter().copied())
+            .zip(0_u64..)
         {
             self.bus
-                .write_u8(physical, byte)
+                .write_u8(translation.address, byte, translation.memory_type)
                 .map_err(|_| self.access_exception(access, address.wrapping_add(offset)))?;
         }
+        self.mmu.note_explicit_write();
         Ok(())
     }
 
@@ -1816,11 +1858,11 @@ impl<B: Bus> Machine<B> {
             let virtual_address = address
                 .checked_add(offset)
                 .ok_or_else(|| self.access_exception(access, fault_address))?;
-            let physical = self
+            let translation = self
                 .translate_address(virtual_address, access)
                 .map_err(|exception| Exception::new(exception.cause, fault_address))?;
             self.bus
-                .check_write(physical, 1)
+                .check_write(translation.address, 1, translation.memory_type)
                 .map_err(|_| self.access_exception(access, fault_address))?;
         }
         Ok(())
@@ -1976,6 +2018,13 @@ fn instruction_word(instruction: Instruction) -> u32 {
         Instruction::Mret => return inst::MATCH_MRET,
         Instruction::Sret => return inst::MATCH_SRET,
         Instruction::Wfi => return inst::MATCH_WFI,
+        Instruction::SfenceWInval => return inst::MATCH_SFENCE_W_INVAL,
+        Instruction::SfenceInvalIr => return inst::MATCH_SFENCE_INVAL_IR,
+        Instruction::SinvalVma { rs1, rs2 } => {
+            return inst::MATCH_SINVAL_VMA
+                | (u32::from(rs1) << RS1_SHIFT)
+                | (u32::from(rs2) << RS2_SHIFT);
+        }
         Instruction::SfenceVma { rs1, rs2 } => {
             return inst::MATCH_SFENCE_VMA
                 | (u32::from(rs1) << RS1_SHIFT)
@@ -2170,6 +2219,17 @@ mod tests {
     const SATP_MODE_SHIFT: u32 = 60;
     const SATP_SV39_MODE: u64 = 8;
     const SATP_ASID_SHIFT: u32 = 44;
+    const MENVCFG_PBMTE: u64 = 1 << 62;
+    const PTE_VALID: u64 = 1 << 0;
+    const PTE_READ: u64 = 1 << 1;
+    const PTE_WRITE: u64 = 1 << 2;
+    const PTE_EXECUTE: u64 = 1 << 3;
+    const PTE_ACCESSED: u64 = 1 << 6;
+    const PTE_DIRTY: u64 = 1 << 7;
+    const PTE_PPN_SHIFT: u32 = 10;
+    const PTE_PBMT_NON_CACHEABLE: u64 = 1 << 61;
+    const SV39_LOW_1GB_VA: u64 = 0x4000_0000;
+    const TRANSLATED_OFFSET: u64 = 0x104;
     const FADD_FT2_FT0_FT1: u32 = 0x0010_7153;
     const BOXED_ONE: u64 = 0xffff_ffff_3f80_0000;
     const BOXED_TWO: u64 = 0xffff_ffff_4000_0000;
@@ -2178,16 +2238,47 @@ mod tests {
     struct WriteFaultBus(Memory);
 
     impl Bus for WriteFaultBus {
-        fn read_u8(&mut self, address: u64) -> Result<u8, Trap> {
-            self.0.read_u8(address)
+        fn read_u8(&mut self, address: u64, memory_type: MemoryType) -> Result<u8, Trap> {
+            self.0.read_u8(address, memory_type)
         }
 
-        fn write_u8(&mut self, _address: u64, _value: u8) -> Result<(), Trap> {
+        fn write_u8(
+            &mut self,
+            _address: u64,
+            _value: u8,
+            _memory_type: MemoryType,
+        ) -> Result<(), Trap> {
             Err(Trap::AccessFault)
         }
 
-        fn check_write(&mut self, _address: u64, _width: u64) -> Result<(), Trap> {
+        fn check_write(
+            &mut self,
+            _address: u64,
+            _width: u64,
+            _memory_type: MemoryType,
+        ) -> Result<(), Trap> {
             Err(Trap::AccessFault)
+        }
+    }
+
+    struct TypeRecordingBus {
+        memory: Memory,
+        reads: Vec<MemoryType>,
+    }
+
+    impl Bus for TypeRecordingBus {
+        fn read_u8(&mut self, address: u64, memory_type: MemoryType) -> Result<u8, Trap> {
+            self.reads.push(memory_type);
+            self.memory.read_u8(address, memory_type)
+        }
+
+        fn write_u8(
+            &mut self,
+            address: u64,
+            value: u8,
+            memory_type: MemoryType,
+        ) -> Result<(), Trap> {
+            self.memory.write_u8(address, value, memory_type)
         }
     }
 
@@ -2247,7 +2338,7 @@ mod tests {
         machine.cpu_mut().set_pc(DRAM_BASE);
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE, FADD_FT2_FT0_FT1)
+            .write_u32(DRAM_BASE, FADD_FT2_FT0_FT1, MemoryType::Cacheable)
             .unwrap();
 
         machine.step(StepOptions::default());
@@ -2666,7 +2757,7 @@ mod tests {
         machine.cpu_mut().write_gpr(8, 0x1122_3344_5566_7788);
         machine
             .bus_mut()
-            .write_u64(DRAM_BASE, 0x8877_6655_4433_2211)
+            .write_u64(DRAM_BASE, 0x8877_6655_4433_2211, MemoryType::Cacheable)
             .unwrap();
 
         machine.execute(Instruction::LrD {
@@ -2687,7 +2778,10 @@ mod tests {
         });
         assert_eq!(machine.cpu().read_gpr(9), 0);
         assert_eq!(
-            machine.bus_mut().read_u64(DRAM_BASE).unwrap(),
+            machine
+                .bus_mut()
+                .read_u64(DRAM_BASE, MemoryType::Cacheable)
+                .unwrap(),
             0x1122_3344_5566_7788
         );
         assert_eq!(machine.reservation, None);
@@ -2698,7 +2792,7 @@ mod tests {
         let mut machine = machine();
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE + 4, 0x1122_3344)
+            .write_u32(DRAM_BASE + 4, 0x1122_3344, MemoryType::Cacheable)
             .unwrap();
         machine.cpu_mut().write_gpr(5, DRAM_BASE + 4);
         machine.cpu_mut().write_gpr(6, DRAM_BASE);
@@ -2720,7 +2814,13 @@ mod tests {
 
         assert_eq!(machine.cpu().read_gpr(8), 0x1122_3344);
         assert_eq!(machine.cpu().read_gpr(9), 0);
-        assert_eq!(machine.bus_mut().read_u32(DRAM_BASE).unwrap(), 0x5566_7788);
+        assert_eq!(
+            machine
+                .bus_mut()
+                .read_u32(DRAM_BASE, MemoryType::Cacheable)
+                .unwrap(),
+            0x5566_7788
+        );
     }
 
     #[test]
@@ -2731,7 +2831,7 @@ mod tests {
         machine.cpu_mut().write_gpr(7, 0xdead_beef);
         machine
             .bus_mut()
-            .write_u64(DRAM_BASE, 0x1122_3344_5566_7788)
+            .write_u64(DRAM_BASE, 0x1122_3344_5566_7788, MemoryType::Cacheable)
             .unwrap();
 
         machine.execute(Instruction::LrD {
@@ -2758,7 +2858,10 @@ mod tests {
         assert_eq!(machine.cpu().read_gpr(9), 1);
         assert_eq!(machine.cpu().read_gpr(10), 1);
         assert_eq!(
-            machine.bus_mut().read_u64(DRAM_BASE).unwrap(),
+            machine
+                .bus_mut()
+                .read_u64(DRAM_BASE, MemoryType::Cacheable)
+                .unwrap(),
             0x1122_3344_5566_7788
         );
     }
@@ -2827,7 +2930,7 @@ mod tests {
     }
 
     #[test]
-    fn misaligned_atomic_accesses_report_their_phase() {
+    fn misaligned_atomic_accesses_report_access_faults() {
         let mut load = trapped_machine();
         load.cpu_mut().set_pc(DRAM_BASE);
         load.cpu_mut().write_gpr(5, DRAM_BASE + 2);
@@ -2837,7 +2940,7 @@ mod tests {
             aq: false,
             rl: false,
         });
-        assert_trap(&load, inst::CAUSE_MISALIGNED_LOAD, DRAM_BASE + 2, DRAM_BASE);
+        assert_trap(&load, inst::CAUSE_LOAD_ACCESS, DRAM_BASE + 2, DRAM_BASE);
 
         let mut store = trapped_machine();
         store.cpu_mut().set_pc(DRAM_BASE);
@@ -2849,12 +2952,7 @@ mod tests {
             aq: false,
             rl: false,
         });
-        assert_trap(
-            &store,
-            inst::CAUSE_MISALIGNED_STORE,
-            DRAM_BASE + 4,
-            DRAM_BASE,
-        );
+        assert_trap(&store, inst::CAUSE_STORE_ACCESS, DRAM_BASE + 4, DRAM_BASE);
     }
 
     #[test]
@@ -2874,7 +2972,10 @@ mod tests {
         let mut machine = machine();
         machine.cpu_mut().write_gpr(5, DRAM_BASE);
         machine.cpu_mut().write_gpr(6, 1);
-        machine.bus_mut().write_u32(DRAM_BASE, 0x8000_0000).unwrap();
+        machine
+            .bus_mut()
+            .write_u32(DRAM_BASE, 0x8000_0000, MemoryType::Cacheable)
+            .unwrap();
 
         machine.execute(Instruction::AmoSwapW {
             rd: 7,
@@ -2885,7 +2986,13 @@ mod tests {
         });
 
         assert_eq!(machine.cpu().read_gpr(7), 0xffff_ffff_8000_0000);
-        assert_eq!(machine.bus_mut().read_u32(DRAM_BASE).unwrap(), 1);
+        assert_eq!(
+            machine
+                .bus_mut()
+                .read_u32(DRAM_BASE, MemoryType::Cacheable)
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -2918,7 +3025,7 @@ mod tests {
     }
 
     #[test]
-    fn amo_alignment_faults_report_store_misaligned() {
+    fn amo_alignment_faults_report_store_access() {
         let mut misaligned = trapped_machine();
         misaligned.cpu_mut().set_pc(DRAM_BASE);
         misaligned.cpu_mut().write_gpr(5, DRAM_BASE + 2);
@@ -2931,7 +3038,7 @@ mod tests {
         });
         assert_trap(
             &misaligned,
-            inst::CAUSE_MISALIGNED_STORE,
+            inst::CAUSE_STORE_ACCESS,
             DRAM_BASE + 2,
             DRAM_BASE,
         );
@@ -2970,7 +3077,9 @@ mod tests {
     #[test]
     fn atomic_write_faults_report_store_access_and_preserve_rd() {
         let mut memory = Memory::with_size(64);
-        memory.write_u32(DRAM_BASE, 1).unwrap();
+        memory
+            .write_u32(DRAM_BASE, 1, MemoryType::Cacheable)
+            .unwrap();
         let mut amo = Machine::new(WriteFaultBus(memory));
         assert!(amo.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
         amo.cpu_mut().set_pc(DRAM_BASE);
@@ -2990,7 +3099,9 @@ mod tests {
         assert_trap(&amo, inst::CAUSE_STORE_ACCESS, DRAM_BASE, DRAM_BASE);
 
         let mut memory = Memory::with_size(64);
-        memory.write_u64(DRAM_BASE, 1).unwrap();
+        memory
+            .write_u64(DRAM_BASE, 1, MemoryType::Cacheable)
+            .unwrap();
         let mut sc = Machine::new(WriteFaultBus(memory));
         assert!(sc.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
         sc.cpu_mut().set_pc(DRAM_BASE);
@@ -3089,7 +3200,7 @@ mod tests {
         let mut machine = machine();
         machine
             .bus_mut()
-            .write_u16(DRAM_BASE, COMPRESSED_ADD_X5_ONE)
+            .write_u16(DRAM_BASE, COMPRESSED_ADD_X5_ONE, MemoryType::Cacheable)
             .unwrap();
         machine.cpu_mut().set_pc(DRAM_BASE);
 
@@ -3104,11 +3215,15 @@ mod tests {
         let mut machine = machine();
         machine
             .bus_mut()
-            .write_u16(DRAM_BASE, COMPRESSED_ADDI_X5_ONE)
+            .write_u16(DRAM_BASE, COMPRESSED_ADDI_X5_ONE, MemoryType::Cacheable)
             .unwrap();
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE + MIN_INSTRUCTION_BYTES, STANDARD_ADDI_X5_X0_THREE)
+            .write_u32(
+                DRAM_BASE + MIN_INSTRUCTION_BYTES,
+                STANDARD_ADDI_X5_X0_THREE,
+                MemoryType::Cacheable,
+            )
             .unwrap();
         machine.cpu_mut().set_pc(DRAM_BASE);
 
@@ -3127,7 +3242,7 @@ mod tests {
         let mut machine = machine();
         machine
             .bus_mut()
-            .write_u16(DRAM_BASE, COMPRESSED_J_SELF)
+            .write_u16(DRAM_BASE, COMPRESSED_J_SELF, MemoryType::Cacheable)
             .unwrap();
         machine.cpu_mut().set_pc(DRAM_BASE);
 
@@ -3596,6 +3711,17 @@ mod tests {
             (Instruction::Mret, inst::MATCH_MRET),
             (Instruction::Sret, inst::MATCH_SRET),
             (Instruction::Wfi, inst::MATCH_WFI),
+            (Instruction::SfenceWInval, inst::MATCH_SFENCE_W_INVAL),
+            (Instruction::SfenceInvalIr, inst::MATCH_SFENCE_INVAL_IR),
+            (
+                Instruction::SinvalVma {
+                    rs1: SFENCE_RS1,
+                    rs2: SFENCE_RS2,
+                },
+                inst::MATCH_SINVAL_VMA
+                    | (u32::from(SFENCE_RS1) << RS1_FIELD_SHIFT)
+                    | (u32::from(SFENCE_RS2) << RS2_FIELD_SHIFT),
+            ),
             (
                 Instruction::SfenceVma {
                     rs1: SFENCE_RS1,
@@ -3771,6 +3897,30 @@ mod tests {
             ),
             (Instruction::Sret, 0, PrivilegeMode::User, inst::MATCH_SRET),
             (Instruction::Wfi, 0, PrivilegeMode::User, inst::MATCH_WFI),
+            (
+                Instruction::SinvalVma { rs1: 0, rs2: 0 },
+                MSTATUS_TVM_BIT,
+                PrivilegeMode::Supervisor,
+                inst::MATCH_SINVAL_VMA,
+            ),
+            (
+                Instruction::SinvalVma { rs1: 0, rs2: 0 },
+                0,
+                PrivilegeMode::User,
+                inst::MATCH_SINVAL_VMA,
+            ),
+            (
+                Instruction::SfenceWInval,
+                0,
+                PrivilegeMode::User,
+                inst::MATCH_SFENCE_W_INVAL,
+            ),
+            (
+                Instruction::SfenceInvalIr,
+                0,
+                PrivilegeMode::User,
+                inst::MATCH_SFENCE_INVAL_IR,
+            ),
         ] {
             let mut machine = trapped_machine();
             assert!(machine.cpu_mut().write_csr(inst::CSR_MSTATUS, status));
@@ -3824,6 +3974,42 @@ mod tests {
     }
 
     #[test]
+    fn svinval_instructions_execute_in_supervisor_mode() {
+        let mut machine = machine();
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+
+        machine.execute(Instruction::SfenceWInval);
+        machine.execute(Instruction::SinvalVma { rs1: 0, rs2: 0 });
+        machine.execute(Instruction::SfenceInvalIr);
+
+        assert_eq!(machine.cpu().pc(), 12);
+        assert_eq!(machine.cpu().read_csr(inst::CSR_SCAUSE), Some(0));
+    }
+
+    #[test]
+    fn tvm_blocks_vma_invalidation_but_not_global_invalidation_fences() {
+        let mut machine = trapped_machine();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_TVM_BIT)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+
+        machine.execute(Instruction::SfenceWInval);
+        machine.execute(Instruction::SfenceInvalIr);
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MCAUSE), None);
+
+        machine.execute(Instruction::SinvalVma { rs1: 0, rs2: 0 });
+        assert_trap(
+            &machine,
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(inst::MATCH_SINVAL_VMA),
+            8,
+        );
+    }
+
+    #[test]
     fn supervisor_satp_supports_sv39_and_tvm_blocks_supervisor_access() {
         let mut machine = machine();
         let satp = SATP_SV39_MODE << SATP_MODE_SHIFT | 0x1234_u64 << SATP_ASID_SHIFT | 0x12345;
@@ -3841,6 +4027,63 @@ mod tests {
         );
         machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
         assert_eq!(machine.cpu().read_csr(inst::CSR_SATP), None);
+    }
+
+    #[test]
+    fn translated_pbmt_memory_type_reaches_the_bus() {
+        let mut memory = Memory::with_size(0x2000);
+        let leaf = ((DRAM_BASE >> 12) << PTE_PPN_SHIFT)
+            | PTE_VALID
+            | PTE_READ
+            | PTE_WRITE
+            | PTE_EXECUTE
+            | PTE_ACCESSED
+            | PTE_DIRTY
+            | PTE_PBMT_NON_CACHEABLE;
+        memory
+            .write_u64(DRAM_BASE + 8, leaf, MemoryType::Cacheable)
+            .unwrap();
+        memory
+            .write_u32(
+                DRAM_BASE + TRANSLATED_OFFSET,
+                0xdead_beef,
+                MemoryType::Cacheable,
+            )
+            .unwrap();
+        let mut machine = Machine::new(TypeRecordingBus {
+            memory,
+            reads: Vec::new(),
+        });
+        let satp = (SATP_SV39_MODE << SATP_MODE_SHIFT) | (DRAM_BASE >> 12);
+        assert!(machine.cpu_mut().write_csr(inst::CSR_SATP, satp));
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MENVCFG, MENVCFG_PBMTE)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        machine
+            .cpu_mut()
+            .write_gpr(usize::from(5_u8), SV39_LOW_1GB_VA + TRANSLATED_OFFSET);
+
+        machine.execute(Instruction::Lw {
+            rd: 6,
+            rs1: 5,
+            offset: 0,
+        });
+
+        assert_eq!(machine.cpu().read_gpr(6), 0xffff_ffff_dead_beef);
+        let first_data_read = machine.bus_mut().reads.len() - 4;
+        assert_eq!(
+            &machine.bus_mut().reads[first_data_read..],
+            [
+                MemoryType::NonCacheable,
+                MemoryType::NonCacheable,
+                MemoryType::NonCacheable,
+                MemoryType::NonCacheable,
+            ]
+        );
     }
 
     #[test]
@@ -3930,7 +4173,7 @@ mod tests {
         machine.cpu_mut().set_pc(DRAM_BASE);
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE, inst::MATCH_AMOCAS_D)
+            .write_u32(DRAM_BASE, inst::MATCH_AMOCAS_D, MemoryType::Cacheable)
             .unwrap();
 
         machine.step(StepOptions::default());
@@ -3949,7 +4192,11 @@ mod tests {
         machine.cpu_mut().set_pc(DRAM_BASE + MIN_INSTRUCTION_BYTES);
         machine
             .bus_mut()
-            .write_u16(DRAM_BASE + MIN_INSTRUCTION_BYTES, ILLEGAL_COMPRESSED_ZERO)
+            .write_u16(
+                DRAM_BASE + MIN_INSTRUCTION_BYTES,
+                ILLEGAL_COMPRESSED_ZERO,
+                MemoryType::Cacheable,
+            )
             .unwrap();
 
         machine.step(StepOptions::default());
@@ -3968,7 +4215,11 @@ mod tests {
         machine.cpu_mut().set_pc(DRAM_BASE + MIN_INSTRUCTION_BYTES);
         machine
             .bus_mut()
-            .write_u16(DRAM_BASE + MIN_INSTRUCTION_BYTES, COMPRESSED_EBREAK)
+            .write_u16(
+                DRAM_BASE + MIN_INSTRUCTION_BYTES,
+                COMPRESSED_EBREAK,
+                MemoryType::Cacheable,
+            )
             .unwrap();
 
         machine.step(StepOptions::default());
@@ -4022,7 +4273,7 @@ mod tests {
         let mut machine = machine();
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE, inst::MATCH_ECALL)
+            .write_u32(DRAM_BASE, inst::MATCH_ECALL, MemoryType::Cacheable)
             .unwrap();
         machine.cpu_mut().set_pc(DRAM_BASE);
 
@@ -4084,7 +4335,7 @@ mod tests {
         machine.cpu_mut().set_pc(DRAM_BASE);
         machine
             .bus_mut()
-            .write_u32(DRAM_BASE, inst::MATCH_ADDI)
+            .write_u32(DRAM_BASE, inst::MATCH_ADDI, MemoryType::Cacheable)
             .unwrap();
 
         machine.step(StepOptions::default());
@@ -4177,7 +4428,7 @@ mod tests {
         let mut stepped = machine();
         stepped
             .bus_mut()
-            .write_u32(DRAM_BASE, inst::MATCH_ADDI)
+            .write_u32(DRAM_BASE, inst::MATCH_ADDI, MemoryType::Cacheable)
             .unwrap();
         stepped.cpu_mut().set_pc(DRAM_BASE);
         stepped.step(StepOptions::default());
@@ -4314,7 +4565,7 @@ mod tests {
         machine.cpu_mut().write_gpr(1, DRAM_BASE);
         machine
             .bus_mut()
-            .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef)
+            .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef, MemoryType::Cacheable)
             .unwrap();
         assert!(
             machine
@@ -4546,7 +4797,7 @@ mod tests {
             machine.cpu_mut().write_gpr(1, DRAM_BASE);
             machine
                 .bus_mut()
-                .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef)
+                .write_u64(DRAM_BASE + 8, 0x0123_4567_89ab_cdef, MemoryType::Cacheable)
                 .unwrap();
             assert!(
                 machine
@@ -4631,12 +4882,21 @@ mod tests {
         let mut machine = Machine::new(Memory::new());
         machine.cpu_mut().set_pc(DRAM_BASE);
         machine.cpu_mut().write_gpr(1, DRAM_BASE + 17);
-        machine.bus_mut().write_u8(DRAM_BASE + 10, 0x5a).unwrap();
+        machine
+            .bus_mut()
+            .write_u8(DRAM_BASE + 10, 0x5a, MemoryType::Cacheable)
+            .unwrap();
 
         machine.execute(Instruction::CboClean { rs1: 1 });
 
         assert_eq!(machine.cpu().pc(), DRAM_BASE + 4);
-        assert_eq!(machine.bus_mut().read_u8(DRAM_BASE + 10).unwrap(), 0x5a);
+        assert_eq!(
+            machine
+                .bus_mut()
+                .read_u8(DRAM_BASE + 10, MemoryType::Cacheable)
+                .unwrap(),
+            0x5a
+        );
 
         let mut trapped = trapped_machine();
         trapped.cpu_mut().set_pc(DRAM_BASE);
@@ -4654,14 +4914,20 @@ mod tests {
         for offset in 0..CACHE_BLOCK_BYTES {
             machine
                 .bus_mut()
-                .write_u8(DRAM_BASE + offset, 0xa5)
+                .write_u8(DRAM_BASE + offset, 0xa5, MemoryType::Cacheable)
                 .unwrap();
         }
 
         machine.execute(Instruction::CboZero { rs1: 1 });
 
         for offset in 0..CACHE_BLOCK_BYTES {
-            assert_eq!(machine.bus_mut().read_u8(DRAM_BASE + offset).unwrap(), 0);
+            assert_eq!(
+                machine
+                    .bus_mut()
+                    .read_u8(DRAM_BASE + offset, MemoryType::Cacheable)
+                    .unwrap(),
+                0
+            );
         }
     }
 
@@ -4673,7 +4939,7 @@ mod tests {
         for offset in 0..32 {
             machine
                 .bus_mut()
-                .write_u8(DRAM_BASE + offset, 0x5a)
+                .write_u8(DRAM_BASE + offset, 0x5a, MemoryType::Cacheable)
                 .unwrap();
         }
 
@@ -4684,7 +4950,13 @@ mod tests {
             Some(u64::from(inst::CAUSE_STORE_ACCESS))
         );
         for offset in 0..32 {
-            assert_eq!(machine.bus_mut().read_u8(DRAM_BASE + offset).unwrap(), 0x5a);
+            assert_eq!(
+                machine
+                    .bus_mut()
+                    .read_u8(DRAM_BASE + offset, MemoryType::Cacheable)
+                    .unwrap(),
+                0x5a
+            );
         }
     }
 

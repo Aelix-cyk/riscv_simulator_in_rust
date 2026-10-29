@@ -7,7 +7,7 @@ mod assemble;
 use std::hint::black_box;
 use std::time::Instant;
 
-use riscv_simulator_in_rust::bus::Bus;
+use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::decode::{Instruction, decode};
 use riscv_simulator_in_rust::machine::Machine;
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
@@ -30,7 +30,7 @@ fn main() {
     machine.cpu_mut().set_pc(DRAM_BASE);
     machine
         .bus_mut()
-        .load_bytes(DRAM_BASE, &program.binary)
+        .load_bytes(DRAM_BASE, &program.binary, MemoryType::Cacheable)
         .unwrap();
 
     for instruction in &instructions {

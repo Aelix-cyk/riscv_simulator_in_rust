@@ -4,7 +4,7 @@
 mod assemble;
 
 use assemble::{Disassembled, branch_target};
-use riscv_simulator_in_rust::bus::Bus;
+use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::decode::{Instruction, decode, render};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 
@@ -52,7 +52,9 @@ fn renderer_matches_objdump_text() {
 fn check_fixture(name: &str, assembler: fn(&str) -> assemble::Program) {
     let program = assembler(name);
     let mut memory = Memory::with_size(program.binary.len());
-    memory.load_bytes(DRAM_BASE, &program.binary).unwrap();
+    memory
+        .load_bytes(DRAM_BASE, &program.binary, MemoryType::Cacheable)
+        .unwrap();
 
     for line in &program.instructions {
         let address = line.address;
