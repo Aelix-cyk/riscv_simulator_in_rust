@@ -517,10 +517,32 @@ impl Csrs {
                     privilege == PrivilegeMode::User || self.mstatus & MSTATUS_SIE != 0,
                 )
             } else {
-                (PrivilegeMode::Machine, self.mstatus & MSTATUS_MIE != 0)
+                (
+                    PrivilegeMode::Machine,
+                    privilege != PrivilegeMode::Machine || self.mstatus & MSTATUS_MIE != 0,
+                )
             };
             enabled.then_some((target, INTERRUPT_CAUSE_BIT | cause))
         })
+    }
+
+    /// Returns the CSR value used as the write base of a CSR read-modify-write.
+    ///
+    /// External interrupt-controller signals are visible to the CSR read but
+    /// never participate in the value written back by CSRRS/CSRRC.
+    pub(crate) fn read_for_rmw_with_privilege(
+        self,
+        address: u16,
+        privilege: PrivilegeMode,
+    ) -> Option<u64> {
+        if !self.can_read(address, privilege) {
+            return None;
+        }
+        match address {
+            inst::CSR_MIP => Some(self.mip),
+            inst::CSR_SIP => Some(self.mip & self.mideleg),
+            _ => self.read_with_privilege(address, privilege),
+        }
     }
 
     /// Whether any locally enabled interrupt is pending, independent of the
@@ -912,6 +934,33 @@ mod tests {
     }
 
     #[test]
+    fn csr_rmw_base_excludes_device_pending_bits() {
+        let mut csrs = Csrs::default();
+        let software_pending = INTERRUPT_STIP;
+        let device_pending = INTERRUPT_SEIP;
+        csrs.set_device_pending(device_pending);
+        assert!(csrs.write(inst::CSR_MIP, software_pending));
+        assert!(csrs.write(inst::CSR_MIDELEG, device_pending | software_pending));
+
+        assert_eq!(
+            csrs.read(inst::CSR_MIP),
+            Some(software_pending | device_pending)
+        );
+        assert_eq!(
+            csrs.read_for_rmw_with_privilege(inst::CSR_MIP, PrivilegeMode::Machine),
+            Some(software_pending)
+        );
+        assert_eq!(
+            csrs.read(inst::CSR_SIP),
+            Some(software_pending | device_pending)
+        );
+        assert_eq!(
+            csrs.read_for_rmw_with_privilege(inst::CSR_SIP, PrivilegeMode::Machine),
+            Some(software_pending)
+        );
+    }
+
+    #[test]
     fn enabled_delegated_supervisor_interrupts_use_architectural_priority() {
         let mut csrs = Csrs::default();
         assert!(csrs.write(inst::CSR_MSTATUS, MSTATUS_SIE));
@@ -1073,6 +1122,16 @@ mod tests {
             None,
             "mstatus.MIE must enable machine interrupts"
         );
+        for privilege in [PrivilegeMode::Supervisor, PrivilegeMode::User] {
+            assert_eq!(
+                csrs.pending_interrupt(privilege),
+                Some((
+                    PrivilegeMode::Machine,
+                    INTERRUPT_CAUSE_BIT | MACHINE_EXTERNAL_INTERRUPT
+                )),
+                "machine interrupts are always globally enabled below M-mode"
+            );
+        }
 
         assert!(csrs.write(inst::CSR_MSTATUS, MSTATUS_MIE));
         assert_eq!(

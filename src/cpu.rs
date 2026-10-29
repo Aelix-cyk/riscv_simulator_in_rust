@@ -144,6 +144,12 @@ impl Cpu {
         self.csrs.read_with_privilege(address, self.privilege)
     }
 
+    /// Reads the software-writable value used as a CSR read-modify-write base.
+    pub(crate) fn read_csr_for_rmw(&self, address: u16) -> Option<u64> {
+        self.csrs
+            .read_for_rmw_with_privilege(address, self.privilege)
+    }
+
     /// Reads the combined floating-point control and status register.
     pub fn read_fcsr(&self) -> Option<u64> {
         self.read_csr(crate::inst::CSR_FCSR)

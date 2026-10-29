@@ -23,3 +23,7 @@
 | [0019 — CBO faults report the block base instead of rs1](0019-cbo-fault-address-uses-block-base.md) | Fixed |
 | [0020 — PBMT encodings are raw magic numbers](0020-pbmt-encoding-constants.md) | Fixed |
 | [0021 — Unsupported trigger CSRs made the breakpoint fixture fail](0021-breakpoint-trigger-csrs.md) | Fixed |
+| [0022 — machine interrupts are masked in lower privilege modes](0022-machine-interrupts-gated-by-mie-only.md) | Fixed |
+| [0023 — mip/sip RMW latches device SEIP](0023-mip-sip-rmw-latches-device-seip.md) | Fixed |
+| [0024 — PLIC claim returns an already-claimed source](0024-plic-claim-returns-outstanding-id.md) | Fixed |
+| [0025 — platform loads bypass the effective DRAM window](0025-platform-load-bypasses-dram-window.md) | Fixed |

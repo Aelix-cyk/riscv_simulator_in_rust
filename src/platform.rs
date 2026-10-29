@@ -105,6 +105,19 @@ impl Platform {
         std::mem::take(&mut self.uart.output)
     }
 
+    fn effective_dram_size(&self) -> u64 {
+        DRAM_SIZE.min(self.memory.len())
+    }
+
+    fn dram_offset(&self, address: u64, width: u64) -> Result<u64, Trap> {
+        let offset = address.checked_sub(DRAM_BASE).ok_or(Trap::AccessFault)?;
+        let end = offset.checked_add(width).ok_or(Trap::AccessFault)?;
+        if end > self.effective_dram_size() {
+            return Err(Trap::AccessFault);
+        }
+        Ok(offset)
+    }
+
     fn read_clint_u8(&self, offset: u64) -> Result<u8, Trap> {
         if offset < CLINT_MSIP_BYTES {
             return byte_of(self.machine_software_pending, offset, CLINT_MSIP_BYTES);
@@ -204,7 +217,7 @@ impl Bus for Platform {
         if let Some(offset) = offset_in(address, CLINT_BASE, CLINT_SIZE) {
             return self.read_clint_u8(offset);
         }
-        if address >= DRAM_BASE && address - DRAM_BASE < DRAM_SIZE {
+        if self.dram_offset(address, 1).is_ok() {
             return self.memory.read_u8(address, memory_type);
         }
         if let Some(offset) = offset_in(address, PLIC_BASE, PLIC_SIZE) {
@@ -223,7 +236,7 @@ impl Bus for Platform {
         if let Some(offset) = offset_in(address, CLINT_BASE, CLINT_SIZE) {
             return self.write_clint_u8(offset, value);
         }
-        if address >= DRAM_BASE && address - DRAM_BASE < DRAM_SIZE {
+        if self.dram_offset(address, 1).is_ok() {
             return self.memory.write_u8(address, value, memory_type);
         }
         if let Some(offset) = offset_in(address, PLIC_BASE, PLIC_SIZE) {
@@ -242,15 +255,7 @@ impl Bus for Platform {
         memory_type: MemoryType,
     ) -> Result<(), Trap> {
         let length = bytes.len() as u64;
-        let Some(offset) = address.checked_sub(DRAM_BASE) else {
-            return Err(Trap::AccessFault);
-        };
-        if offset
-            .checked_add(length)
-            .is_none_or(|end| end > self.memory.len())
-        {
-            return Err(Trap::AccessFault);
-        }
+        self.dram_offset(address, length)?;
         self.memory.load_bytes(address, bytes, memory_type)
     }
 
@@ -409,8 +414,11 @@ impl Plic {
                 );
             }
             if register == 1 {
-                let claimed = self.claim(context, uart_pending);
-                return byte_of(claimed, offset % PLIC_REGISTER_BYTES, PLIC_REGISTER_BYTES);
+                if offset.is_multiple_of(PLIC_REGISTER_BYTES) {
+                    let claimed = self.claim(context, uart_pending);
+                    return byte_of(claimed, 0, PLIC_REGISTER_BYTES);
+                }
+                return Ok(0);
             }
         }
         Err(Trap::AccessFault)
@@ -466,7 +474,7 @@ impl Plic {
 
     fn claim(&mut self, context: usize, uart_pending: bool) -> u32 {
         if self.claimed[context] != PLIC_NO_SOURCE {
-            return self.claimed[context];
+            return PLIC_NO_SOURCE;
         }
         if !self.context_requested(context, uart_pending) {
             return PLIC_NO_SOURCE;
@@ -638,13 +646,61 @@ mod tests {
             platform.read_u32(claim_address, MemoryType::Io).unwrap(),
             PLIC_UART_SOURCE
         );
+        assert_eq!(platform.read_u32(claim_address, MemoryType::Io).unwrap(), 0);
         assert!(!platform.interrupt_lines().machine_external);
         assert!(!platform.interrupt_lines().supervisor_external);
+
+        let supervisor_claim_address = PLIC_BASE
+            + PLIC_CONTEXT_CLAIM_OFFSET
+            + PLIC_SUPERVISOR_CONTEXT as u64 * PLIC_CONTEXT_REGISTER_BYTES;
+        assert_eq!(
+            platform
+                .read_u32(supervisor_claim_address, MemoryType::Io)
+                .unwrap(),
+            0
+        );
 
         platform
             .write_u32(claim_address, PLIC_UART_SOURCE, MemoryType::Io)
             .unwrap();
         assert!(platform.interrupt_lines().machine_external);
+        assert!(platform.interrupt_lines().supervisor_external);
+        assert_eq!(
+            platform
+                .read_u32(supervisor_claim_address, MemoryType::Io)
+                .unwrap(),
+            PLIC_UART_SOURCE
+        );
+        platform
+            .write_u32(supervisor_claim_address, PLIC_UART_SOURCE, MemoryType::Io)
+            .unwrap();
+    }
+
+    #[test]
+    fn platform_loader_and_bus_share_the_effective_dram_window() {
+        let mut platform = Platform::new(Memory::with_size((DRAM_SIZE * 2) as usize));
+        let last_byte = DRAM_BASE + DRAM_SIZE - 1;
+        platform
+            .load_bytes(last_byte, &[0xaa], MemoryType::Cacheable)
+            .unwrap();
+
+        let first_byte_outside = DRAM_BASE + DRAM_SIZE;
+        assert_eq!(
+            platform.load_bytes(first_byte_outside, &[0xbb], MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(
+            platform.read_u8(first_byte_outside, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(
+            platform.write_u8(first_byte_outside, 0xbb, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(
+            platform.read_u8(last_byte, MemoryType::Cacheable).unwrap(),
+            0xaa
+        );
     }
 
     #[test]

@@ -1003,7 +1003,8 @@ impl<B: Bus> Machine<B> {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
                 if writes_csr_from_register(rs1) {
-                    self.write_csr(csr, old | source, word)?;
+                    let base = self.require_csr_rmw(csr, word)?;
+                    self.write_csr(csr, base | source, word)?;
                 }
                 self.write(rd, old);
             }
@@ -1011,7 +1012,8 @@ impl<B: Bus> Machine<B> {
                 let old = self.require_csr(csr, word)?;
                 let source = self.gpr(rs1);
                 if writes_csr_from_register(rs1) {
-                    self.write_csr(csr, old & !source, word)?;
+                    let base = self.require_csr_rmw(csr, word)?;
+                    self.write_csr(csr, base & !source, word)?;
                 }
                 self.write(rd, old);
             }
@@ -1023,14 +1025,16 @@ impl<B: Bus> Machine<B> {
             Instruction::Csrrsi { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
                 if zimm != 0 {
-                    self.write_csr(csr, old | u64::from(zimm), word)?;
+                    let base = self.require_csr_rmw(csr, word)?;
+                    self.write_csr(csr, base | u64::from(zimm), word)?;
                 }
                 self.write(rd, old);
             }
             Instruction::Csrrci { rd, csr, zimm } => {
                 let old = self.require_csr(csr, word)?;
                 if zimm != 0 {
-                    self.write_csr(csr, old & !u64::from(zimm), word)?;
+                    let base = self.require_csr_rmw(csr, word)?;
+                    self.write_csr(csr, base & !u64::from(zimm), word)?;
                 }
                 self.write(rd, old);
             }
@@ -1171,6 +1175,14 @@ impl<B: Bus> Machine<B> {
     /// Reads a CSR or raises the illegal-instruction exception.
     fn require_csr(&self, address: u16, word: u32) -> Result<u64, Exception> {
         self.cpu.read_csr(address).ok_or(Exception::new(
+            inst::CAUSE_ILLEGAL_INSTRUCTION,
+            u64::from(word),
+        ))
+    }
+
+    /// Reads the software-writable base for a CSR read-modify-write.
+    fn require_csr_rmw(&self, address: u16, word: u32) -> Result<u64, Exception> {
+        self.cpu.read_csr_for_rmw(address).ok_or(Exception::new(
             inst::CAUSE_ILLEGAL_INSTRUCTION,
             u64::from(word),
         ))
@@ -2262,6 +2274,9 @@ mod tests {
     const MSTATUS_TSR_BIT: u64 = 1 << 22;
     const INTERRUPT_CAUSE_BIT: u64 = 1 << 63;
     const MACHINE_TIMER_INTERRUPT: u64 = 7;
+    const INTERRUPT_SSIP_BIT: u64 = 1 << 1;
+    const INTERRUPT_STIP_BIT: u64 = 1 << 5;
+    const INTERRUPT_SEIP_BIT: u64 = 1 << 9;
     const SATP_MODE_SHIFT: u32 = 60;
     const SATP_SV39_MODE: u64 = 8;
     const SATP_ASID_SHIFT: u32 = 44;
@@ -3694,6 +3709,67 @@ mod tests {
 
         assert_eq!(machine.cpu().read_gpr(5), 0);
         assert_eq!(machine.cpu().read_csr(inst::CSR_MSCRATCH), Some(1));
+    }
+
+    #[test]
+    fn csr_read_modify_write_does_not_latch_device_interrupt_bits() {
+        let mut machine_set = machine();
+        machine_set
+            .cpu_mut()
+            .csrs_mut()
+            .set_device_pending(INTERRUPT_SEIP_BIT);
+        assert!(
+            machine_set
+                .cpu_mut()
+                .write_csr(inst::CSR_MIP, INTERRUPT_STIP_BIT)
+        );
+        machine_set.cpu_mut().write_gpr(6, INTERRUPT_SSIP_BIT);
+
+        machine_set.execute(Instruction::Csrrs {
+            rd: 5,
+            csr: inst::CSR_MIP,
+            rs1: 6,
+        });
+
+        assert_eq!(
+            machine_set.cpu().read_gpr(5),
+            INTERRUPT_SEIP_BIT | INTERRUPT_STIP_BIT
+        );
+        machine_set.cpu_mut().csrs_mut().set_device_pending(0);
+        assert_eq!(
+            machine_set.cpu().read_csr(inst::CSR_MIP),
+            Some(INTERRUPT_STIP_BIT | INTERRUPT_SSIP_BIT)
+        );
+
+        let mut machine_clear = machine();
+        machine_clear
+            .cpu_mut()
+            .csrs_mut()
+            .set_device_pending(INTERRUPT_SEIP_BIT);
+        assert!(
+            machine_clear
+                .cpu_mut()
+                .write_csr(inst::CSR_MIDELEG, INTERRUPT_SEIP_BIT | INTERRUPT_STIP_BIT)
+        );
+        assert!(
+            machine_clear
+                .cpu_mut()
+                .write_csr(inst::CSR_MIP, INTERRUPT_STIP_BIT)
+        );
+        machine_clear.cpu_mut().write_gpr(6, INTERRUPT_STIP_BIT);
+
+        machine_clear.execute(Instruction::Csrrc {
+            rd: 5,
+            csr: inst::CSR_SIP,
+            rs1: 6,
+        });
+
+        assert_eq!(
+            machine_clear.cpu().read_gpr(5),
+            INTERRUPT_SEIP_BIT | INTERRUPT_STIP_BIT
+        );
+        machine_clear.cpu_mut().csrs_mut().set_device_pending(0);
+        assert_eq!(machine_clear.cpu().read_csr(inst::CSR_SIP), Some(0));
     }
 
     #[test]
@@ -5210,6 +5286,35 @@ mod tests {
         );
         assert_eq!(machine.cpu().read_csr(inst::CSR_MEPC), Some(DRAM_BASE));
         assert_eq!(machine.cpu().read_csr(inst::CSR_MCYCLE), Some(1));
+    }
+
+    #[test]
+    fn machine_interrupt_preempts_supervisor_mode_with_mie_clear() {
+        let mut machine = Machine::new(Platform::new(Memory::new()));
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MIE, 1 << MACHINE_TIMER_INTERRUPT)
+        );
+        machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
+        machine
+            .bus_mut()
+            .write_u64(CLINT_BASE + CLINT_MTIMECMP_OFFSET, 0, MemoryType::Io)
+            .unwrap();
+
+        machine.step(StepOptions::default());
+
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Machine);
+        assert_eq!(machine.cpu().pc(), HANDLER);
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(INTERRUPT_CAUSE_BIT | MACHINE_TIMER_INTERRUPT)
+        );
+        let status = machine.cpu().read_csr(inst::CSR_MSTATUS).unwrap();
+        assert_eq!(status & MSTATUS_MIE_BIT, 0);
+        assert_eq!(status & MSTATUS_MPP_SUPERVISOR, MSTATUS_MPP_SUPERVISOR);
     }
 
     #[test]
