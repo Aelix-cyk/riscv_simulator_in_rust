@@ -5,6 +5,7 @@ pub mod cli;
 pub mod cpu;
 pub(crate) mod csr;
 pub mod decode;
+pub mod elf;
 pub(crate) mod fp;
 pub(crate) mod fp16;
 pub(crate) mod fp64;

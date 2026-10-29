@@ -1,12 +1,14 @@
-//! Command-line front end: load a flat binary, run it, and report the result.
+//! Command-line front end: load a flat binary or ELF executable, run it, and
+//! report the result.
 
 use std::fs;
 use std::io::Write;
 use std::process::ExitCode;
 
 use riscv_simulator_in_rust::bus::{Bus, MemoryType};
-use riscv_simulator_in_rust::cli::{self, Command, Options, USAGE};
+use riscv_simulator_in_rust::cli::{self, Command, Options, ProgramInput, USAGE};
 use riscv_simulator_in_rust::cpu::{ABI_NAMES, Cpu, FPR_COUNT};
+use riscv_simulator_in_rust::elf::{ElfImage, is_elf};
 use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
 use riscv_simulator_in_rust::platform::Platform;
 
@@ -43,12 +45,27 @@ fn main() -> ExitCode {
 
 /// Loads the program, runs it, prints the final state, and picks an exit code.
 fn run(options: &Options) -> ExitCode {
-    let binary = match fs::read(&options.binary) {
+    let binary = match fs::read(options.input.path()) {
         Ok(binary) => binary,
         Err(error) => {
-            eprintln!("cannot read {}: {error}", options.binary.display());
+            eprintln!("cannot read {}: {error}", options.input.path().display());
             return ExitCode::from(EXIT_USAGE);
         }
+    };
+
+    let elf = match &options.input {
+        ProgramInput::Flat(_) if is_elf(&binary) => {
+            eprintln!("ELF input must be supplied with --elf");
+            return ExitCode::from(EXIT_USAGE);
+        }
+        ProgramInput::Flat(_) => None,
+        ProgramInput::Elf(_) => match ElfImage::parse(&binary, options.dram) {
+            Ok(image) => Some(image),
+            Err(error) => {
+                eprintln!("cannot load {}: {error}", options.input.path().display());
+                return ExitCode::from(EXIT_USAGE);
+            }
+        },
     };
 
     let platform = match Platform::with_layout(options.dram) {
@@ -59,15 +76,24 @@ fn run(options: &Options) -> ExitCode {
         }
     };
     let mut machine = Machine::new(platform);
-    machine.cpu_mut().set_pc(options.dram.base());
-    if let Err(trap) =
-        machine
-            .bus_mut()
-            .load_bytes(options.dram.base(), &binary, MemoryType::Cacheable)
-    {
-        eprintln!("cannot load {}: {trap:?}", options.binary.display());
-        return ExitCode::from(EXIT_USAGE);
-    }
+    let entry = if let Some(image) = elf {
+        if let Err(error) = image.load(machine.bus_mut()) {
+            eprintln!("cannot load {}: {error}", options.input.path().display());
+            return ExitCode::from(EXIT_USAGE);
+        }
+        image.entry()
+    } else {
+        if let Err(trap) =
+            machine
+                .bus_mut()
+                .load_bytes(options.dram.base(), &binary, MemoryType::Cacheable)
+        {
+            eprintln!("cannot load {}: {trap:?}", options.input.path().display());
+            return ExitCode::from(EXIT_USAGE);
+        }
+        options.dram.base()
+    };
+    machine.cpu_mut().set_pc(entry);
 
     let mut steps = 0;
     let outcome = loop {

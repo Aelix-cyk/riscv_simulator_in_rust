@@ -9,6 +9,7 @@ category and listed alphabetically within each section.
 - **Base ISA** — The mandatory integer instruction set of RISC-V; for this project, RV64I.
 - **Byte** — An 8-bit value, the smallest addressable unit of memory.
 - **Doubleword** — A 64-bit value, eight consecutive bytes.
+- **ELF** — Executable and Linkable Format: a standard object-file format that describes executable entry points, loadable segments, addresses, and permissions.
 - **Extension** — An optional named set of instructions added on top of the base ISA, such as M, A, F, D, or C.
 - **funct3** — A 3-bit field in most instruction encodings that selects the specific operation within an opcode.
 - **funct7** — A 7-bit field that further distinguishes R-type operations sharing an opcode and funct3.

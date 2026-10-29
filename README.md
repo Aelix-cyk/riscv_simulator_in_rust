@@ -33,17 +33,25 @@ to enter the architectural trap paths.
 ## Usage
 
 ```sh
-cargo run -- --binary path/to/program.bin [--trace] [--max-steps <N>] \
+cargo run -- --elf path/to/program.elf [--trace] [--max-steps <N>] \
     [--dram-base <ADDRESS>] [--dram-size <SIZE>]
 ```
 
-The program is loaded at the configured DRAM base and runs until it exits through
-the platform device, reaches the halt self-loop `jal x0, 0`, or takes
-`--max-steps` steps (default 10 000). The default DRAM layout is 128 MiB starting
-at `0x8000_0000`. `--dram-base` accepts decimal or hexadecimal addresses;
-`--dram-size` accepts bytes or `KiB`, `MiB`, and `GiB` suffixes. Both values
-must be 4 KiB-aligned, and the complete range must fit the 57-bit physical
-address space without overlapping platform MMIO.
+`--elf` loads a static 64-bit little-endian RISC-V `ET_EXEC` file. Every
+loadable segment must have matching physical and virtual addresses and fit the
+configured DRAM range without overlapping another segment or platform MMIO. The
+entry point must lie in a file-backed executable segment. Dynamically linked
+executables are not supported.
+
+Flat binaries remain available through `--binary`; they are loaded at the
+configured DRAM base. The input must use exactly one of `--elf` or `--binary`.
+
+Programs run until they exit through the platform device, reach the halt
+self-loop `jal x0, 0`, or take `--max-steps` steps (default 10 000). The default
+DRAM layout is 128 MiB starting at `0x8000_0000`. `--dram-base` accepts decimal
+or hexadecimal addresses; `--dram-size` accepts bytes or `KiB`, `MiB`, and
+`GiB` suffixes. Both values must be 4 KiB-aligned, and the complete range must
+fit the 57-bit physical address space without overlapping platform MMIO.
 
 On termination the simulator flushes UART output, prints the 32 general-purpose
 registers by ABI name, all FPR bit patterns, decoded FCSR fields, and the step
@@ -68,14 +76,20 @@ available through the `Platform` API for tests and host front ends.
 
 ## Building a program to run
 
-The simulator takes a flat binary, so assemble and link a program, then strip it to
-its loadable bytes. Fixtures use `tests/fixtures/link.ld`, which places the image at
+Fixtures use `tests/fixtures/link.ld`, which places the executable at
 `DRAM_BASE` with no leading gap:
 
 ```sh
 $RISCV/bin/riscv64-unknown-elf-gcc -march=rv64imafc_zfh_zicsr_zicntr_zifencei -mabi=lp64 -nostdlib \
     -I tests/fixtures -Wl,-T,tests/fixtures/link.ld \
     -o /tmp/loop.elf tests/fixtures/loop.S
+cargo run -- --elf /tmp/loop.elf --trace
+```
+
+To run the same program as a flat image, strip it to loadable bytes and use
+`--binary`:
+
+```sh
 $RISCV/bin/riscv64-unknown-elf-objcopy -O binary /tmp/loop.elf /tmp/loop.bin
 cargo run -- --binary /tmp/loop.bin --trace
 ```
@@ -97,7 +111,8 @@ cargo bench --bench execute    # execution throughput
 Fixtures live in `tests/fixtures/`; `tests/support/assemble.rs` assembles them at
 run time with the local toolchain and queries `spike` for the expected architectural
 state — all GPRs, FPRs, FCSR, and the loaded memory — so no binaries are
-committed. The decoder and trace text are additionally checked line by line
+committed. ELF fixtures are also loaded through the public `--elf` path. The
+decoder and trace text are additionally checked line by line
 against `objdump`.
 
 External compliance gates are explicit because they require separate checkouts

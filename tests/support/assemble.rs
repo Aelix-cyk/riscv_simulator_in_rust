@@ -72,6 +72,16 @@ impl Program {
         self.binary.len().div_ceil(8) * 8
     }
 
+    /// Returns the linked ELF executable.
+    pub fn elf_bytes(&self) -> Vec<u8> {
+        fs::read(&self.elf).expect("read linked ELF")
+    }
+
+    /// Returns the path to the linked ELF executable.
+    pub fn elf_path(&self) -> &Path {
+        &self.elf
+    }
+
     /// Architectural state spike reports for this fixture: final registers plus
     /// the first `binary.len()` bytes of memory, rounded up to the eight bytes
     /// each `mem` command prints.

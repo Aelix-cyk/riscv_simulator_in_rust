@@ -1,6 +1,6 @@
 //! Command-line options for the simulator binary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::memory::DramLayout;
 
@@ -24,14 +24,32 @@ pub enum Command {
 /// Options for a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
-    /// Flat binary to load at the configured DRAM base.
-    pub binary: PathBuf,
+    /// Flat binary or ELF executable to load.
+    pub input: ProgramInput,
     /// Print each executed instruction.
     pub trace: bool,
     /// Steps to take before giving up.
     pub max_steps: u64,
     /// Configured DRAM address range.
     pub dram: DramLayout,
+}
+
+/// Input image format selected by the command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramInput {
+    /// Flat binary loaded at the configured DRAM base.
+    Flat(PathBuf),
+    /// Static ELF64 executable.
+    Elf(PathBuf),
+}
+
+impl ProgramInput {
+    /// Returns the selected image path.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Flat(path) | Self::Elf(path) => path,
+        }
+    }
 }
 
 /// Steps a run takes before giving up, unless `--max-steps` says otherwise.
@@ -41,8 +59,11 @@ pub const DEFAULT_MAX_STEPS: u64 = 10_000;
 pub const USAGE: &str = "\
 usage: riscv_simulator_in_rust --binary <FILE> [--trace] [--max-steps <N>]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
+       riscv_simulator_in_rust --elf <FILE> [--trace] [--max-steps <N>]
+       [--dram-base <ADDRESS>] [--dram-size <SIZE>]
 
   --binary <FILE>   flat binary to load at the configured DRAM base and run
+  --elf <FILE>      static RV64 ELF executable to load and run
   --trace           print each executed instruction
   --max-steps <N>   stop after N steps (default 10000)
   --dram-base <ADDRESS>  DRAM base (default 0x80000000)
@@ -56,7 +77,7 @@ where
     I: IntoIterator<Item = String>,
 {
     let mut args = args.into_iter();
-    let mut binary = None;
+    let mut input = None;
     let mut trace = false;
     let mut max_steps = DEFAULT_MAX_STEPS;
     let mut dram_base = DramLayout::default().base();
@@ -66,7 +87,11 @@ where
         match argument.as_str() {
             "--binary" => {
                 let value = args.next().ok_or("--binary needs a file")?;
-                binary = Some(PathBuf::from(value));
+                set_input(&mut input, ProgramInput::Flat(PathBuf::from(value)))?;
+            }
+            "--elf" => {
+                let value = args.next().ok_or("--elf needs a file")?;
+                set_input(&mut input, ProgramInput::Elf(PathBuf::from(value)))?;
             }
             "--trace" => trace = true,
             "--max-steps" => {
@@ -88,15 +113,23 @@ where
         }
     }
 
-    let binary = binary.ok_or("--binary <FILE> is required")?;
+    let input = input.ok_or("--binary <FILE> or --elf <FILE> is required")?;
     let dram = DramLayout::new(dram_base, dram_size)
         .map_err(|error| format!("invalid DRAM layout: {error}"))?;
     Ok(Command::Run(Options {
-        binary,
+        input,
         trace,
         max_steps,
         dram,
     }))
+}
+
+fn set_input(input: &mut Option<ProgramInput>, value: ProgramInput) -> Result<(), String> {
+    if input.is_some() {
+        return Err("only one of --binary or --elf may be supplied".to_owned());
+    }
+    *input = Some(value);
+    Ok(())
 }
 
 fn parse_size(value: &str) -> Result<u64, String> {
@@ -136,12 +169,28 @@ mod tests {
         assert_eq!(
             command,
             Command::Run(Options {
-                binary: PathBuf::from("loop.bin"),
+                input: ProgramInput::Flat(PathBuf::from("loop.bin")),
                 trace: false,
                 max_steps: DEFAULT_MAX_STEPS,
                 dram: DramLayout::default(),
             })
         );
+    }
+
+    #[test]
+    fn elf_and_binary_inputs_are_mutually_exclusive() {
+        assert_eq!(
+            parse_args(&["--elf", "program.elf"]).unwrap(),
+            Command::Run(Options {
+                input: ProgramInput::Elf(PathBuf::from("program.elf")),
+                trace: false,
+                max_steps: DEFAULT_MAX_STEPS,
+                dram: DramLayout::default(),
+            })
+        );
+        assert!(parse_args(&["--binary", "program.bin", "--elf", "program.elf"]).is_err());
+        assert!(parse_args(&["--elf", "program.elf", "--binary", "program.bin"]).is_err());
+        assert!(parse_args(&["--elf"]).is_err());
     }
 
     #[test]

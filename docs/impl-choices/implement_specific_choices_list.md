@@ -113,8 +113,9 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 
 | Choice | Ours | Status |
 |---|---|---|
-| Program container | Flat binary, loaded at the configured DRAM base | Decided |
-| Program start | Entry is the load address; the CLI sets the PC there | Decided |
+| Program container | Static ELF64 `ET_EXEC` via `--elf`, or a flat binary via `--binary` | Decided |
+| ELF loading | RV64 little-endian only; matching `p_paddr`/`p_vaddr`; preflight segment bounds and overlap; file-backed executable entry; zero BSS tails; reject `PT_INTERP`, PIE, and dynamic executables | Decided |
+| Program start | ELF `e_entry`; flat images start at the configured DRAM base | Decided |
 | Address translation | Fetch and memory accesses use one central Bare/Sv39 path with per-byte translation for cross-page accesses | Decided |
 | Translation controls | `satp` supports Bare and Sv39 with a 16-bit ASID; `mstatus.TVM`, `SUM`, and `MXR` are writable; `SFENCE.VMA` and `SINVAL.VMA` honor ASID/VA forms | Decided |
 | Memory types | `menvcfg.PBMTE` enables `Svpbmt`; each translated access carries PMA/default, non-cacheable, or I/O memory type into the bus | Decided |
