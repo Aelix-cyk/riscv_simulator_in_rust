@@ -78,7 +78,7 @@ mandatory here by reference, so these rows gate conformance too.
 | RVA22S64 option | Sv48 | Not implemented | Permanently excluded |
 | RVA22S64 option | Sv57 | Not implemented | Permanently excluded |
 | RVA22S64 option | Svnapot | Not implemented | Permanently excluded |
-| RVA22S64 option | Ssu64xl | Not implemented | Permanently excluded |
+| RVA22S64 option | Ssu64xl | Implemented | UXLEN=64 hardwired; `sstatus.UXL` reads 2 |
 | RVA22S64 option | Sstc | Not implemented | Permanently excluded |
 | RVA22S64 option | Sscofpmf | Not implemented | Permanently excluded |
 | RVA22S64 option | Zkr | Not implemented | Permanently excluded |

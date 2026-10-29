@@ -125,7 +125,10 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 
 ## 8. Optional extensions
 
+`Ssu64xl` is **Implemented**: UXLEN is hardwired to 64 and `sstatus.UXL`
+reports 2.
+
 The following optional extensions are permanently **Not implemented**:
-`V`, `Zkn`, `Zks`, `Zacas`, `Sv48`, `Sv57`, `Svnapot`, `Ssu64xl`, `Sstc`,
-`Sscofpmf`, `Zkr`, and `H` (augmented). They are outside the simulator's final
-scope and will not be added as future work.
+`V`, `Zkn`, `Zks`, `Zacas`, `Sv48`, `Sv57`, `Svnapot`, `Sstc`, `Sscofpmf`,
+`Zkr`, and `H` (augmented). They are outside the simulator's final scope and
+will not be added as future work.
