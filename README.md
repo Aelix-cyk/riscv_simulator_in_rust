@@ -25,20 +25,40 @@ through one-hot event masks. The target profile is RVA22S64, built up
 progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
 requirements and the choices the specification leaves open.
 
+The CLI runs on a small platform bus with a CLINT timer, NS16550-compatible
+UART, PLIC, and an explicit exit device. Machine and supervisor interrupt state
+is connected to device interrupt lines, allowing timer and external interrupts
+to enter the architectural trap paths.
+
 ## Usage
 
 ```sh
 cargo run -- --binary path/to/program.bin [--trace] [--max-steps <N>]
 ```
 
-The program is loaded at `DRAM_BASE` (`0x8000_0000`) and runs until it reaches the
-halt self-loop, `jal x0, 0`, or takes `--max-steps` steps (default 10 000). On halt
-it prints the 32 general-purpose registers by ABI name, all FPR bit patterns,
+The program is loaded at `DRAM_BASE` (`0x8000_0000`) and runs until it exits
+through the platform device, reaches the halt self-loop `jal x0, 0`, or takes
+`--max-steps` steps (default 10 000). On termination it flushes UART output,
+prints the 32 general-purpose registers by ABI name, all FPR bit patterns,
 decoded FCSR fields, and the step count.
 `--trace` prints each decoded instruction first, one per line.
 
-Exit codes: `0` halted, `2` step limit or bad input. Exceptions do not terminate the
-run; an invalid or missing trap handler eventually reaches the step limit.
+Exit codes: the platform exit status, `0` for a halt self-loop, or `2` for a
+step limit or bad input. Exceptions do not terminate the run; an invalid or
+missing trap handler eventually reaches the step limit.
+
+## Platform memory map
+
+| Device | Address | Model |
+|---|---:|---|
+| Syscon | `0x0010_0000` | Write `0x0000_5555` to exit successfully or `(code << 16) \| 0x3333` to exit with `code` |
+| CLINT | `0x0200_0000` | Machine software interrupt at offset `0x0`; 64-bit `mtimecmp` at `0x4000`; writable 64-bit `mtime` at `0xbff8` |
+| PLIC | `0x0c00_0000` | Priority, pending, enable, threshold, and claim/complete for machine and supervisor contexts |
+| UART | `0x1000_0000` | NS16550-style transmit, receive, interrupt-enable, interrupt-ID, and line-status registers |
+| DRAM | `0x8000_0000` | 1 MiB of little-endian memory |
+
+The PLIC exposes one source: UART receive interrupts. The UART receive queue is
+available through the `Platform` API for tests and host front ends.
 
 ## Building a program to run
 

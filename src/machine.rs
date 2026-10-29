@@ -76,6 +76,8 @@ enum CacheBlockAccess {
 pub enum RunOutcome {
     /// The hart executed the halt self-loop, `jal x0, 0`.
     Halted,
+    /// A platform device requested simulator termination.
+    Exited,
     /// The step limit ran out first.
     StepLimitReached,
 }
@@ -123,6 +125,7 @@ pub struct Machine<B: Bus> {
     cpu: Cpu,
     bus: B,
     halted: bool,
+    waiting_for_interrupt: bool,
     reservation: Option<u64>,
     mmu: Mmu,
 }
@@ -139,6 +142,7 @@ impl<B: Bus> Machine<B> {
             cpu,
             bus,
             halted: false,
+            waiting_for_interrupt: false,
             reservation: None,
             mmu: Mmu::default(),
         }
@@ -164,6 +168,11 @@ impl<B: Bus> Machine<B> {
         self.halted
     }
 
+    /// Exit status requested by a platform device.
+    pub fn exit_code(&self) -> Option<u8> {
+        self.bus.exit_code()
+    }
+
     /// Fetches and decodes the instruction at the PC, without executing it.
     pub fn fetch(&mut self) -> Result<Instruction, Trap> {
         self.fetch_decoded()
@@ -180,8 +189,17 @@ impl<B: Bus> Machine<B> {
     /// Synchronous faults enter the machine or delegated supervisor trap
     /// handler instead of escaping this method.
     pub fn step(&mut self, options: StepOptions) {
-        if self.take_pending_supervisor_interrupt() {
-            self.cpu.csrs_mut().advance_cycle();
+        if self.waiting_for_interrupt {
+            self.advance_cycle();
+            self.sync_device_interrupts();
+            if self.cpu.csrs().has_enabled_interrupt() {
+                self.waiting_for_interrupt = false;
+                self.take_pending_interrupt();
+            }
+            return;
+        }
+        if self.take_pending_interrupt() {
+            self.advance_cycle();
             return;
         }
         let pc = self.cpu.pc();
@@ -189,7 +207,7 @@ impl<B: Bus> Machine<B> {
             Ok(instruction) => instruction,
             Err(exception) => {
                 self.enter_trap(exception);
-                self.cpu.csrs_mut().advance_cycle();
+                self.advance_cycle();
                 return;
             }
         };
@@ -199,16 +217,27 @@ impl<B: Bus> Machine<B> {
         self.execute_with_decoded(instruction);
     }
 
-    fn take_pending_supervisor_interrupt(&mut self) -> bool {
+    fn take_pending_interrupt(&mut self) -> bool {
+        self.sync_device_interrupts();
         let previous = self.cpu.privilege();
-        let Some(cause) = self.cpu.csrs().pending_supervisor_interrupt(previous) else {
+        let Some((target, cause)) = self.cpu.csrs().pending_interrupt(previous) else {
             return false;
         };
         let epc = self.cpu.pc();
-        self.cpu.csrs_mut().enter_s_trap(epc, cause, 0, previous);
-        self.cpu.set_privilege(PrivilegeMode::Supervisor);
-        self.cpu.set_pc(self.cpu.csrs().supervisor_trap_vector());
+        if target == PrivilegeMode::Supervisor {
+            self.cpu.csrs_mut().enter_s_trap(epc, cause, 0, previous);
+            self.cpu.set_pc(self.cpu.csrs().supervisor_trap_vector());
+        } else {
+            self.cpu.csrs_mut().enter_trap(epc, cause, 0, previous);
+            self.cpu.set_pc(self.cpu.csrs().trap_vector());
+        }
+        self.cpu.set_privilege(target);
         true
+    }
+
+    fn sync_device_interrupts(&mut self) {
+        let device_pending = csr::device_interrupt_mask(self.bus.interrupt_lines());
+        self.cpu.csrs_mut().set_device_pending(device_pending);
     }
 
     /// Runs until the halt self-loop retires or `step_limit` steps are taken.
@@ -217,6 +246,9 @@ impl<B: Bus> Machine<B> {
             self.step(StepOptions::default());
             if self.halted {
                 return RunOutcome::Halted;
+            }
+            if self.exit_code().is_some() {
+                return RunOutcome::Exited;
             }
         }
         RunOutcome::StepLimitReached
@@ -258,17 +290,25 @@ impl<B: Bus> Machine<B> {
         match self.execute_inner(decoded) {
             Ok(()) => {
                 self.cpu.csrs_mut().record_retirement(events, written_csr);
-                if !writes_cycle {
-                    self.cpu.csrs_mut().advance_cycle();
+                if writes_cycle {
+                    self.bus.tick();
+                } else {
+                    self.advance_cycle();
                 }
                 true
             }
             Err(exception) => {
                 self.enter_trap(exception);
-                self.cpu.csrs_mut().advance_cycle();
+                self.advance_cycle();
                 false
             }
         }
+    }
+
+    /// Advances platform time and architectural counters by one cycle.
+    fn advance_cycle(&mut self) {
+        self.bus.tick();
+        self.cpu.csrs_mut().advance_cycle();
     }
 
     /// Delivers a synchronous trap to machine or delegated supervisor mode.
@@ -1042,6 +1082,9 @@ impl<B: Bus> Machine<B> {
                         inst::CAUSE_ILLEGAL_INSTRUCTION,
                         u64::from(word),
                     ));
+                }
+                if !self.cpu.csrs().has_enabled_interrupt() {
+                    self.waiting_for_interrupt = true;
                 }
             }
             Instruction::SinvalVma { rs1, rs2 } => {
@@ -2187,6 +2230,7 @@ mod tests {
     use crate::cpu::RA;
     use crate::decode::decode;
     use crate::memory::{DRAM_BASE, Memory};
+    use crate::platform::{CLINT_BASE, CLINT_MTIMECMP_OFFSET, Platform};
 
     const HANDLER: u64 = DRAM_BASE + 32;
     const SUPERVISOR_HANDLER: u64 = DRAM_BASE + 48;
@@ -2208,6 +2252,7 @@ mod tests {
     const FP_INITIAL_STATUS: u64 = 1 << 13;
     const FP_DIRTY_STATUS: u64 = 0b11 << 13;
     const MSTATUS_SIE_BIT: u64 = 1 << 1;
+    const MSTATUS_MIE_BIT: u64 = 1 << 3;
     const MSTATUS_SPIE_BIT: u64 = 1 << 5;
     const MSTATUS_SPP_BIT: u64 = 1 << 8;
     const MSTATUS_MPP_SUPERVISOR: u64 = 1 << 11;
@@ -2216,6 +2261,7 @@ mod tests {
     const MSTATUS_TW_BIT: u64 = 1 << 21;
     const MSTATUS_TSR_BIT: u64 = 1 << 22;
     const INTERRUPT_CAUSE_BIT: u64 = 1 << 63;
+    const MACHINE_TIMER_INTERRUPT: u64 = 7;
     const SATP_MODE_SHIFT: u32 = 60;
     const SATP_SV39_MODE: u64 = 8;
     const SATP_ASID_SHIFT: u32 = 44;
@@ -3963,7 +4009,7 @@ mod tests {
     }
 
     #[test]
-    fn wfi_is_a_no_op_without_interrupts() {
+    fn wfi_retires_before_entering_wait_state() {
         let mut machine = machine();
         machine.cpu_mut().set_privilege(PrivilegeMode::Supervisor);
 
@@ -3971,6 +4017,7 @@ mod tests {
 
         assert_eq!(machine.cpu().pc(), 4);
         assert_eq!(machine.cpu().privilege(), PrivilegeMode::Supervisor);
+        assert!(machine.waiting_for_interrupt);
     }
 
     #[test]
@@ -5131,5 +5178,71 @@ mod tests {
         });
 
         assert_eq!(machine.cpu().read_gpr(5), 0);
+    }
+
+    #[test]
+    fn platform_timer_interrupt_enters_the_machine_handler() {
+        let mut machine = Machine::new(Platform::new(Memory::new()));
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_MIE_BIT)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MIE, 1 << MACHINE_TIMER_INTERRUPT)
+        );
+        machine
+            .bus_mut()
+            .write_u64(CLINT_BASE + CLINT_MTIMECMP_OFFSET, 0, MemoryType::Io)
+            .unwrap();
+
+        machine.step(StepOptions::default());
+
+        assert_eq!(machine.cpu().privilege(), PrivilegeMode::Machine);
+        assert_eq!(machine.cpu().pc(), HANDLER);
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(INTERRUPT_CAUSE_BIT | MACHINE_TIMER_INTERRUPT)
+        );
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MEPC), Some(DRAM_BASE));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_MCYCLE), Some(1));
+    }
+
+    #[test]
+    fn wfi_stalls_until_a_timer_interrupt_is_pending() {
+        let mut machine = Machine::new(Platform::new(Memory::new()));
+        machine.cpu_mut().set_pc(DRAM_BASE);
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MSTATUS, MSTATUS_MIE_BIT)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_MIE, 1 << MACHINE_TIMER_INTERRUPT)
+        );
+        machine
+            .bus_mut()
+            .write_u64(CLINT_BASE + CLINT_MTIMECMP_OFFSET, 2, MemoryType::Io)
+            .unwrap();
+
+        machine.execute(Instruction::Wfi);
+        assert!(machine.waiting_for_interrupt);
+        assert_eq!(machine.cpu().pc(), DRAM_BASE + STANDARD_INSTRUCTION_BYTES);
+
+        machine.step(StepOptions::default());
+
+        assert!(!machine.waiting_for_interrupt);
+        assert_eq!(machine.cpu().pc(), HANDLER);
+        assert_eq!(
+            machine.cpu().read_csr(inst::CSR_MCAUSE),
+            Some(INTERRUPT_CAUSE_BIT | MACHINE_TIMER_INTERRUPT)
+        );
     }
 }

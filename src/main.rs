@@ -1,6 +1,7 @@
 //! Command-line front end: load a flat binary, run it, and report the result.
 
 use std::fs;
+use std::io::Write;
 use std::process::ExitCode;
 
 use riscv_simulator_in_rust::bus::{Bus, MemoryType};
@@ -8,12 +9,15 @@ use riscv_simulator_in_rust::cli::{self, Command, Options, USAGE};
 use riscv_simulator_in_rust::cpu::{ABI_NAMES, Cpu, FPR_COUNT};
 use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
+use riscv_simulator_in_rust::platform::Platform;
 
 /// Exit code for usage and input errors.
 const EXIT_USAGE: u8 = 2;
 
 /// Exit code for a run that stopped at its step limit.
 const EXIT_STEP_LIMIT: u8 = 2;
+/// Exit code used when a platform reports exit without a status.
+const EXIT_DEVICE_FAILURE: u8 = 1;
 
 /// Number of defined IEEE exception flags in `fcsr`.
 const FFLAGS_BITS: u32 = 5;
@@ -48,7 +52,7 @@ fn run(options: &Options) -> ExitCode {
         }
     };
 
-    let mut machine = Machine::new(Memory::new());
+    let mut machine = Machine::new(Platform::new(Memory::new()));
     machine.cpu_mut().set_pc(DRAM_BASE);
     if let Err(trap) = machine
         .bus_mut()
@@ -70,13 +74,23 @@ fn run(options: &Options) -> ExitCode {
         if machine.halted() {
             break RunOutcome::Halted;
         }
+        if machine.exit_code().is_some() {
+            break RunOutcome::Exited;
+        }
     };
 
+    let _ = std::io::stdout().write_all(&machine.bus_mut().take_console_output());
     print_registers(machine.cpu());
     println!("steps = {steps}");
 
     match outcome {
-        RunOutcome::Halted => ExitCode::SUCCESS,
+        RunOutcome::Halted | RunOutcome::Exited => ExitCode::from(machine.exit_code().unwrap_or(
+            if outcome == RunOutcome::Halted {
+                0
+            } else {
+                EXIT_DEVICE_FAILURE
+            },
+        )),
         RunOutcome::StepLimitReached => {
             eprintln!("step limit reached after {steps} steps");
             ExitCode::from(EXIT_STEP_LIMIT)

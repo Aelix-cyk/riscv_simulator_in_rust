@@ -13,4 +13,5 @@ pub mod machine;
 pub mod memory;
 pub(crate) mod mmu;
 pub(crate) mod opcodes;
+pub mod platform;
 pub mod trap;

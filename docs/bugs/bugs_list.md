@@ -22,3 +22,4 @@
 | [0018 — CBO management uses store permission checks](0018-cbo-management-uses-store-permission-check.md) | Fixed |
 | [0019 — CBO faults report the block base instead of rs1](0019-cbo-fault-address-uses-block-base.md) | Fixed |
 | [0020 — PBMT encodings are raw magic numbers](0020-pbmt-encoding-constants.md) | Fixed |
+| [0021 — Unsupported trigger CSRs made the breakpoint fixture fail](0021-breakpoint-trigger-csrs.md) | Fixed |

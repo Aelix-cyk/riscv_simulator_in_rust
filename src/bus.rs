@@ -13,6 +13,23 @@ pub enum MemoryType {
     Io,
 }
 
+/// Interrupt lines asserted by devices attached to a bus.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InterruptLines {
+    /// A device is requesting a machine-mode software interrupt.
+    pub machine_software: bool,
+    /// A timer is requesting a machine-mode timer interrupt.
+    pub machine_timer: bool,
+    /// A controller is requesting a machine-mode external interrupt.
+    pub machine_external: bool,
+    /// A device is requesting a supervisor-mode software interrupt.
+    pub supervisor_software: bool,
+    /// A timer is requesting a supervisor-mode timer interrupt.
+    pub supervisor_timer: bool,
+    /// A controller is requesting a supervisor-mode external interrupt.
+    pub supervisor_external: bool,
+}
+
 /// A little-endian bus. Implementations model main memory or a device.
 pub trait Bus {
     /// Reads one byte.
@@ -86,6 +103,17 @@ pub trait Bus {
         }
         Ok(())
     }
+    /// Advances time-dependent devices by one architectural cycle.
+    fn tick(&mut self) {}
+    /// Returns the currently asserted interrupt lines.
+    fn interrupt_lines(&self) -> InterruptLines {
+        InterruptLines::default()
+    }
+    /// Returns the requested simulator exit status, if a platform device has
+    /// requested termination.
+    fn exit_code(&self) -> Option<u8> {
+        None
+    }
 }
 
 /// Reads `N` bytes through [`Bus::read_u8`].
@@ -129,6 +157,7 @@ mod tests {
         bytes: [u8; 8],
         reads: u64,
         last_memory_type: Option<MemoryType>,
+        ticks: u64,
     }
 
     impl TinyDevice {
@@ -137,6 +166,7 @@ mod tests {
                 bytes: [0; 8],
                 reads: 0,
                 last_memory_type: None,
+                ticks: 0,
             }
         }
 
@@ -164,6 +194,10 @@ mod tests {
             self.last_memory_type = Some(memory_type);
             *self.bytes.get_mut(index).ok_or(Trap::AccessFault)? = value;
             Ok(())
+        }
+
+        fn tick(&mut self) {
+            self.ticks += 1;
         }
     }
 
@@ -264,5 +298,15 @@ mod tests {
 
         device.read_u64(0, MemoryType::NonCacheable).unwrap();
         assert_eq!(device.last_memory_type, Some(MemoryType::NonCacheable));
+    }
+
+    #[test]
+    fn default_device_state_is_inactive() {
+        let mut device = TinyDevice::new();
+
+        assert_eq!(device.interrupt_lines(), InterruptLines::default());
+        assert_eq!(device.exit_code(), None);
+        device.tick();
+        assert_eq!(device.ticks, 1);
     }
 }

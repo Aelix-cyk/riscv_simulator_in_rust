@@ -29,6 +29,16 @@ impl Memory {
         }
     }
 
+    /// Returns the size of this memory region in bytes.
+    pub fn len(&self) -> u64 {
+        self.bytes.len() as u64
+    }
+
+    /// Returns whether this memory region has no bytes.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
     /// Translates `address` into a buffer offset, faulting when any of the
     /// `width` bytes fall outside memory.
     fn offset(&self, address: u64, width: u64) -> Result<usize, Trap> {

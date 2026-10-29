@@ -88,10 +88,10 @@ mandatory here by reference, so these rows gate conformance too.
 | Cache geometry and coherence | No cache model | Implemented | 64-byte, naturally aligned architectural blocks |
 | PMP entries and granularity | | Undecided | |
 | PMA regions and attributes | One implicit cacheable region accepting PBMT NC/I/O overrides | Implemented | |
-| Interrupt controller | | Undecided | |
-| Timer facility | | Undecided | |
+| Interrupt controller | | Implemented | One-source PLIC with machine and supervisor contexts |
+| Timer facility | | Implemented | 64-bit CLINT `mtime` and `mtimecmp` |
 | Misaligned access outside cacheable, coherent main memory | | Undecided | Zicclsm already mandates main-memory support; this row covers other regions and performance |
-| Debug (per debug specification) | | Undecided | |
+| Debug (per debug specification) | | Implemented | No trigger module; trigger CSRs report zero triggers |
 | Multi-hart topology | | Undecided | |
 
 ## 5. Recommendations

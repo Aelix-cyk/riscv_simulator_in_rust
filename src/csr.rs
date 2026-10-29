@@ -1,5 +1,6 @@
 //! Control and status registers for M, S, and U modes.
 
+use crate::bus::InterruptLines;
 use crate::cpu::PrivilegeMode;
 use crate::inst;
 
@@ -98,6 +99,9 @@ const INTERRUPT_MASK: u64 = INTERRUPT_SSIP
     | INTERRUPT_MEIP;
 const SUPERVISOR_INTERRUPT_MASK: u64 = INTERRUPT_SSIP | INTERRUPT_STIP | INTERRUPT_SEIP;
 const MIP_WRITABLE: u64 = INTERRUPT_SSIP | INTERRUPT_STIP | INTERRUPT_SEIP;
+const MACHINE_SOFTWARE_INTERRUPT: u64 = 3;
+const MACHINE_TIMER_INTERRUPT: u64 = 7;
+const MACHINE_EXTERNAL_INTERRUPT: u64 = 11;
 const SUPERVISOR_SOFTWARE_INTERRUPT: u64 = 1;
 const SUPERVISOR_TIMER_INTERRUPT: u64 = 5;
 const SUPERVISOR_EXTERNAL_INTERRUPT: u64 = 9;
@@ -130,6 +134,30 @@ const SATP_SV39_MODE: u64 = 8;
 const SATP_ASID_SHIFT: u32 = 44;
 const SATP_ASID_MASK: u64 = (1 << 16) - 1;
 const SATP_PPN_MASK: u64 = (1 << 44) - 1;
+
+/// Converts asserted platform interrupt lines into architectural `mip` bits.
+pub(crate) fn device_interrupt_mask(lines: InterruptLines) -> u64 {
+    let mut pending = 0;
+    if lines.machine_software {
+        pending |= INTERRUPT_MSIP;
+    }
+    if lines.machine_timer {
+        pending |= INTERRUPT_MTIP;
+    }
+    if lines.machine_external {
+        pending |= INTERRUPT_MEIP;
+    }
+    if lines.supervisor_software {
+        pending |= INTERRUPT_SSIP;
+    }
+    if lines.supervisor_timer {
+        pending |= INTERRUPT_STIP;
+    }
+    if lines.supervisor_external {
+        pending |= INTERRUPT_SEIP;
+    }
+    pending
+}
 
 const fn exception_bit(cause: u8) -> u64 {
     1_u64 << cause
@@ -165,6 +193,7 @@ pub(crate) struct Csrs {
     pmpaddr0: u64,
     mnstatus: u64,
     mip: u64,
+    device_pending: u64,
     mcounteren: u64,
     scounteren: u64,
     mcountinhibit: u64,
@@ -206,7 +235,7 @@ impl Csrs {
             inst::CSR_MCAUSE => Some(self.mcause),
             inst::CSR_MTVAL => Some(self.mtval),
             inst::CSR_MIE => Some(self.mie),
-            inst::CSR_MIP => Some(self.mip),
+            inst::CSR_MIP => Some(self.pending_mip()),
             inst::CSR_MEDELEG => Some(self.medeleg),
             inst::CSR_MIDELEG => Some(self.mideleg),
             inst::CSR_MCOUNTEREN => Some(self.mcounteren),
@@ -216,7 +245,7 @@ impl Csrs {
             inst::CSR_SENVCFG => Some(self.senvcfg),
             inst::CSR_SSTATUS => Some(self.sstatus_value()),
             inst::CSR_SIE => Some(self.mie & self.mideleg),
-            inst::CSR_SIP => Some(self.mip & self.mideleg),
+            inst::CSR_SIP => Some(self.pending_mip() & self.mideleg),
             inst::CSR_STVEC => Some(self.stvec),
             inst::CSR_SSCRATCH => Some(self.sscratch),
             inst::CSR_SEPC => Some(self.sepc),
@@ -227,6 +256,11 @@ impl Csrs {
             inst::CSR_PMPCFG0 => Some(self.pmpcfg0),
             inst::CSR_PMPADDR0 => Some(self.pmpaddr0),
             inst::CSR_MNSTATUS => Some(self.mnstatus),
+            inst::CSR_TCONTROL
+            | inst::CSR_TSELECT
+            | inst::CSR_TDATA1
+            | inst::CSR_TDATA2
+            | inst::CSR_TDATA3 => Some(0),
             inst::CSR_CYCLE | inst::CSR_TIME => Some(self.mcycle),
             inst::CSR_INSTRET => Some(self.minstret),
             inst::CSR_MCYCLE => Some(self.mcycle),
@@ -318,6 +352,13 @@ impl Csrs {
             inst::CSR_PMPCFG0 => self.pmpcfg0 = value,
             inst::CSR_PMPADDR0 => self.pmpaddr0 = value,
             inst::CSR_MNSTATUS => self.mnstatus = value,
+            // This hart has no debug triggers. The trigger CSRs remain
+            // accessible so software can discover that zero triggers exist.
+            inst::CSR_TCONTROL
+            | inst::CSR_TSELECT
+            | inst::CSR_TDATA1
+            | inst::CSR_TDATA2
+            | inst::CSR_TDATA3 => {}
             inst::CSR_MCYCLE => self.mcycle = value,
             inst::CSR_MINSTRET => self.minstret = value,
             inst::CSR_MHPMCOUNTER3..=inst::CSR_MHPMCOUNTER31 => {
@@ -441,20 +482,64 @@ impl Csrs {
         cause < u64::BITS as u8 && self.medeleg & exception_bit(cause) != 0
     }
 
-    /// Highest-priority enabled delegated supervisor interrupt for the current
-    /// privilege mode.
-    pub(crate) fn pending_supervisor_interrupt(self, privilege: PrivilegeMode) -> Option<u64> {
-        if privilege == PrivilegeMode::Machine || self.mstatus & MSTATUS_SIE == 0 {
-            return None;
-        }
-        let pending = self.mip & self.mie & self.mideleg & SUPERVISOR_INTERRUPT_MASK;
+    /// Installs pending bits asserted by devices connected to the platform.
+    pub(crate) fn set_device_pending(&mut self, pending: u64) {
+        self.device_pending = pending & INTERRUPT_MASK;
+    }
+
+    /// Highest-priority enabled interrupt and the privilege mode that should
+    /// take it.
+    pub(crate) fn pending_interrupt(
+        self,
+        privilege: PrivilegeMode,
+    ) -> Option<(PrivilegeMode, u64)> {
+        let pending = self.pending_mip() & self.mie;
         [
+            (INTERRUPT_MEIP, MACHINE_EXTERNAL_INTERRUPT),
+            (INTERRUPT_MSIP, MACHINE_SOFTWARE_INTERRUPT),
+            (INTERRUPT_MTIP, MACHINE_TIMER_INTERRUPT),
             (INTERRUPT_SEIP, SUPERVISOR_EXTERNAL_INTERRUPT),
             (INTERRUPT_SSIP, SUPERVISOR_SOFTWARE_INTERRUPT),
             (INTERRUPT_STIP, SUPERVISOR_TIMER_INTERRUPT),
         ]
         .into_iter()
-        .find_map(|(bit, cause)| (pending & bit != 0).then_some(INTERRUPT_CAUSE_BIT | cause))
+        .find_map(|(bit, cause)| {
+            if pending & bit == 0 {
+                return None;
+            }
+            let delegated = self.mideleg & bit != 0;
+            let (target, enabled) = if delegated {
+                if privilege == PrivilegeMode::Machine {
+                    return None;
+                }
+                (
+                    PrivilegeMode::Supervisor,
+                    privilege == PrivilegeMode::User || self.mstatus & MSTATUS_SIE != 0,
+                )
+            } else {
+                (PrivilegeMode::Machine, self.mstatus & MSTATUS_MIE != 0)
+            };
+            enabled.then_some((target, INTERRUPT_CAUSE_BIT | cause))
+        })
+    }
+
+    /// Whether any locally enabled interrupt is pending, independent of the
+    /// current global interrupt-enable state.
+    pub(crate) fn has_enabled_interrupt(self) -> bool {
+        self.pending_mip() & self.mie != 0
+    }
+
+    /// Highest-priority enabled delegated supervisor interrupt for the current
+    /// privilege mode.
+    #[cfg(test)]
+    pub(crate) fn pending_supervisor_interrupt(self, privilege: PrivilegeMode) -> Option<u64> {
+        self.pending_interrupt(privilege)
+            .filter(|(target, _)| *target == PrivilegeMode::Supervisor)
+            .map(|(_, cause)| cause)
+    }
+
+    fn pending_mip(self) -> u64 {
+        self.mip | self.device_pending
     }
 
     /// Whether S-mode accesses to translation-control state are blocked.
@@ -777,6 +862,22 @@ mod tests {
     }
 
     #[test]
+    fn debug_trigger_csrs_report_that_no_triggers_exist() {
+        let mut csrs = Csrs::default();
+
+        for address in [
+            inst::CSR_TCONTROL,
+            inst::CSR_TSELECT,
+            inst::CSR_TDATA1,
+            inst::CSR_TDATA2,
+            inst::CSR_TDATA3,
+        ] {
+            assert!(csrs.write(address, u64::MAX));
+            assert_eq!(csrs.read(address), Some(0));
+        }
+    }
+
+    #[test]
     fn mip_and_sip_write_only_writable_pending_bits_and_preserve_the_rest() {
         let mut csrs = Csrs::default();
         let supervisor_pending = INTERRUPT_STIP | INTERRUPT_SEIP;
@@ -951,6 +1052,62 @@ mod tests {
         assert_eq!(status & MSTATUS_SPIE, MSTATUS_SPIE);
         assert_eq!(status & MSTATUS_SPP, 0);
         assert_eq!(status & MSTATUS_MPRV, 0);
+    }
+
+    #[test]
+    fn machine_interrupts_respect_mie_and_use_architectural_priority() {
+        let mut csrs = Csrs::default();
+        let external = device_interrupt_mask(InterruptLines {
+            machine_external: true,
+            ..InterruptLines::default()
+        });
+        let timer = device_interrupt_mask(InterruptLines {
+            machine_timer: true,
+            ..InterruptLines::default()
+        });
+        csrs.set_device_pending(external | timer);
+        assert!(csrs.write(inst::CSR_MIE, INTERRUPT_MEIP | INTERRUPT_MTIP));
+
+        assert_eq!(
+            csrs.pending_interrupt(PrivilegeMode::Machine),
+            None,
+            "mstatus.MIE must enable machine interrupts"
+        );
+
+        assert!(csrs.write(inst::CSR_MSTATUS, MSTATUS_MIE));
+        assert_eq!(
+            csrs.pending_interrupt(PrivilegeMode::Machine),
+            Some((
+                PrivilegeMode::Machine,
+                INTERRUPT_CAUSE_BIT | MACHINE_EXTERNAL_INTERRUPT
+            ))
+        );
+        assert_eq!(
+            csrs.read(inst::CSR_MIP).unwrap() & (INTERRUPT_MEIP | INTERRUPT_MTIP),
+            INTERRUPT_MEIP | INTERRUPT_MTIP
+        );
+    }
+
+    #[test]
+    fn delegated_interrupts_can_preempt_user_mode_without_sie() {
+        let mut csrs = Csrs::default();
+        let external = device_interrupt_mask(InterruptLines {
+            supervisor_external: true,
+            ..InterruptLines::default()
+        });
+        csrs.set_device_pending(external);
+        assert!(csrs.write(inst::CSR_MIDELEG, INTERRUPT_SEIP));
+        assert!(csrs.write(inst::CSR_MIE, INTERRUPT_SEIP));
+
+        assert_eq!(
+            csrs.pending_interrupt(PrivilegeMode::User),
+            Some((
+                PrivilegeMode::Supervisor,
+                INTERRUPT_CAUSE_BIT | SUPERVISOR_EXTERNAL_INTERRUPT
+            ))
+        );
+        assert_eq!(csrs.pending_interrupt(PrivilegeMode::Supervisor), None);
+        assert_eq!(csrs.pending_interrupt(PrivilegeMode::Machine), None);
     }
 
     #[test]

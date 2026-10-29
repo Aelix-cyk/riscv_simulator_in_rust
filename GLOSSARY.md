@@ -102,6 +102,7 @@ category and listed alphabetically within each section.
 
 - **ALU** — Arithmetic Logic Unit: the circuit that performs integer arithmetic and logic.
 - **Clock cycle** — One tick of the processor clock, the basic unit of simulated time.
+- **CLINT** — Core-Local Interruptor: the machine timer and software-interrupt device.
 - **Core** — The part of a CPU that executes instructions, roughly synonymous with a hart in this single-threaded simulator.
 - **CPI** — Cycles per instruction: the average number of clock cycles each instruction takes.
 - **CPU** — Central Processing Unit: the core, its registers, and the control logic that together execute instructions.
@@ -113,5 +114,7 @@ category and listed alphabetically within each section.
 - **Memory hierarchy** — The layered storage from fast small caches to slow large main memory.
 - **Microarchitecture** — The concrete hardware design that implements an ISA.
 - **MMIO** — Memory-mapped I/O: device registers accessed as ordinary memory addresses.
+- **PLIC** — Platform-Level Interrupt Controller: a memory-mapped controller that claims and completes external interrupt requests.
 - **Pipeline** — An overlapping execution scheme where several instructions are in different stages at once.
+- **UART** — Universal Asynchronous Receiver/Transmitter: the serial-console device used for character input and output.
 - **Write-back** — The pipeline stage that commits a result to the register file or memory.
