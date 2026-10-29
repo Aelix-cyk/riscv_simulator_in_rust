@@ -88,6 +88,7 @@ mandatory here by reference, so these rows gate conformance too.
 
 | Area | Choice | Status | Notes |
 |---|---|---|---|
+| DRAM base and size | Configurable from the CLI | Implemented | Defaults to 128 MiB at `0x8000_0000`; validated to 4 KiB alignment, 57-bit physical addressing, and non-overlapping MMIO |
 | Cache geometry and coherence | No cache model | Implemented | 64-byte, naturally aligned architectural blocks |
 | PMP entries and granularity | No PMP entries | Not implemented | Permanently excluded |
 | PMA regions and attributes | One implicit cacheable region accepting PBMT NC/I/O overrides | Implemented | |

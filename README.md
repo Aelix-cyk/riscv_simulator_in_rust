@@ -33,15 +33,21 @@ to enter the architectural trap paths.
 ## Usage
 
 ```sh
-cargo run -- --binary path/to/program.bin [--trace] [--max-steps <N>]
+cargo run -- --binary path/to/program.bin [--trace] [--max-steps <N>] \
+    [--dram-base <ADDRESS>] [--dram-size <SIZE>]
 ```
 
-The program is loaded at `DRAM_BASE` (`0x8000_0000`) and runs until it exits
-through the platform device, reaches the halt self-loop `jal x0, 0`, or takes
-`--max-steps` steps (default 10 000). On termination it flushes UART output,
-prints the 32 general-purpose registers by ABI name, all FPR bit patterns,
-decoded FCSR fields, and the step count.
-`--trace` prints each decoded instruction first, one per line.
+The program is loaded at the configured DRAM base and runs until it exits through
+the platform device, reaches the halt self-loop `jal x0, 0`, or takes
+`--max-steps` steps (default 10 000). The default DRAM layout is 128 MiB starting
+at `0x8000_0000`. `--dram-base` accepts decimal or hexadecimal addresses;
+`--dram-size` accepts bytes or `KiB`, `MiB`, and `GiB` suffixes. Both values
+must be 4 KiB-aligned, and the complete range must fit the 57-bit physical
+address space without overlapping platform MMIO.
+
+On termination the simulator flushes UART output, prints the 32 general-purpose
+registers by ABI name, all FPR bit patterns, decoded FCSR fields, and the step
+count. `--trace` prints each decoded instruction first, one per line.
 
 Exit codes: the platform exit status, `0` for a halt self-loop, or `2` for a
 step limit or bad input. Exceptions do not terminate the run; an invalid or
@@ -55,7 +61,7 @@ missing trap handler eventually reaches the step limit.
 | CLINT | `0x0200_0000` | Machine software interrupt at offset `0x0`; 64-bit `mtimecmp` at `0x4000`; writable 64-bit `mtime` at `0xbff8` |
 | PLIC | `0x0c00_0000` | Priority, pending, enable, threshold, and claim/complete for machine and supervisor contexts |
 | UART | `0x1000_0000` | NS16550-style transmit, receive, interrupt-enable, interrupt-ID, and line-status registers |
-| DRAM | `0x8000_0000` | 1 MiB of little-endian memory |
+| DRAM | `0x8000_0000` by default | 128 MiB of little-endian memory by default; base and size are CLI-configurable |
 
 The PLIC exposes one source: UART receive interrupts. The UART receive queue is
 available through the `Platform` API for tests and host front ends.
@@ -73,6 +79,11 @@ $RISCV/bin/riscv64-unknown-elf-gcc -march=rv64imafc_zfh_zicsr_zicntr_zifencei -m
 $RISCV/bin/riscv64-unknown-elf-objcopy -O binary /tmp/loop.elf /tmp/loop.bin
 cargo run -- --binary /tmp/loop.bin --trace
 ```
+
+The linker script targets the default DRAM base. When running at a different
+`--dram-base`, link the program there if it contains absolute address
+assumptions; PC-relative programs can be relocated by changing only the load
+base.
 
 ## Tests
 

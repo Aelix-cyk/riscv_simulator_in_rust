@@ -1,9 +1,10 @@
 //! Platform bus with RAM, a timer, UART, interrupt controller, and exit device.
 
 use std::collections::VecDeque;
+use std::fmt;
 
 use crate::bus::{Bus, InterruptLines, MemoryType};
-use crate::memory::{DRAM_BASE, DRAM_SIZE, Memory};
+use crate::memory::{DramLayout, DramLayoutError, Memory, MemoryError};
 use crate::trap::Trap;
 
 /// Base address of the platform test/exit device.
@@ -68,7 +69,39 @@ const PLIC_UART_SOURCE: u32 = 1;
 const PLIC_NO_SOURCE: u32 = 0;
 const PLIC_MAX_PRIORITY: u32 = 7;
 
-/// A physical platform bus with a fixed memory-mapped device map.
+const MMIO_RANGES: [(&str, u64, u64); 4] = [
+    ("Syscon", SYSCON_BASE, SYSCON_SIZE),
+    ("CLINT", CLINT_BASE, CLINT_SIZE),
+    ("PLIC", PLIC_BASE, PLIC_SIZE),
+    ("UART", UART_BASE, UART_SIZE),
+];
+
+/// Why a platform could not be constructed for a DRAM layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformInitError {
+    /// The backing memory does not describe a valid architectural range.
+    InvalidLayout(DramLayoutError),
+    /// The DRAM range overlaps fixed platform MMIO.
+    OverlapsMmio(&'static str),
+    /// The requested host allocation failed.
+    Memory(MemoryError),
+}
+
+impl fmt::Display for PlatformInitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidLayout(error) => error.fmt(formatter),
+            Self::OverlapsMmio(device) => {
+                write!(formatter, "DRAM address range overlaps {device} MMIO")
+            }
+            Self::Memory(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for PlatformInitError {}
+
+/// A physical platform bus with configurable DRAM and fixed memory-mapped devices.
 pub struct Platform {
     memory: Memory,
     clock: u64,
@@ -82,7 +115,31 @@ pub struct Platform {
 
 impl Platform {
     /// Creates a platform with the supplied RAM.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied memory does not describe a valid, non-overlapping
+    /// DRAM range.
     pub fn new(memory: Memory) -> Self {
+        Self::try_new(memory).expect("invalid platform DRAM layout")
+    }
+
+    /// Creates a platform with validated DRAM for every access and image load.
+    pub fn try_new(memory: Memory) -> Result<Self, PlatformInitError> {
+        let layout = DramLayout::new(memory.base(), memory.len())
+            .map_err(PlatformInitError::InvalidLayout)?;
+        Self::validate_mmio_nonoverlap(layout)?;
+        Ok(Self::from_memory(memory))
+    }
+
+    /// Validates and allocates a platform DRAM range.
+    pub fn with_layout(layout: DramLayout) -> Result<Self, PlatformInitError> {
+        Self::validate_mmio_nonoverlap(layout)?;
+        let memory = Memory::try_with_layout(layout).map_err(PlatformInitError::Memory)?;
+        Ok(Self::from_memory(memory))
+    }
+
+    fn from_memory(memory: Memory) -> Self {
         Self {
             memory,
             clock: 0,
@@ -95,6 +152,16 @@ impl Platform {
         }
     }
 
+    fn validate_mmio_nonoverlap(layout: DramLayout) -> Result<(), PlatformInitError> {
+        for (device, base, size) in MMIO_RANGES {
+            let mmio_end = base + size;
+            if layout.base() < mmio_end && base < layout.end() {
+                return Err(PlatformInitError::OverlapsMmio(device));
+            }
+        }
+        Ok(())
+    }
+
     /// Queues one byte for the UART to receive.
     pub fn push_uart_input(&mut self, byte: u8) {
         self.uart.receive.push_back(byte);
@@ -105,14 +172,12 @@ impl Platform {
         std::mem::take(&mut self.uart.output)
     }
 
-    fn effective_dram_size(&self) -> u64 {
-        DRAM_SIZE.min(self.memory.len())
-    }
-
     fn dram_offset(&self, address: u64, width: u64) -> Result<u64, Trap> {
-        let offset = address.checked_sub(DRAM_BASE).ok_or(Trap::AccessFault)?;
+        let offset = address
+            .checked_sub(self.memory.base())
+            .ok_or(Trap::AccessFault)?;
         let end = offset.checked_add(width).ok_or(Trap::AccessFault)?;
-        if end > self.effective_dram_size() {
+        if end > self.memory.len() {
             return Err(Trap::AccessFault);
         }
         Ok(offset)
@@ -204,7 +269,7 @@ impl Platform {
 
 impl Default for Platform {
     fn default() -> Self {
-        Self::new(Memory::new())
+        Self::with_layout(DramLayout::default()).expect("default platform layout must be valid")
     }
 }
 
@@ -540,8 +605,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::{DRAM_BASE, DRAM_PAGE_BYTES};
 
-    const SMALL_MEMORY_BYTES: usize = 0x100;
+    const SMALL_MEMORY_BYTES: usize = DRAM_PAGE_BYTES as usize;
+    const TEST_DRAM_BYTES: u64 = 0x2000;
+    const TEST_CUSTOM_DRAM_BASE: u64 = 0x9000_0000;
     const TIMER_DELAY: u64 = 5;
     const UART_RECEIVE_ENABLE: u8 = 1;
     const PLIC_SOURCE: u64 = 1;
@@ -677,14 +745,21 @@ mod tests {
     }
 
     #[test]
-    fn platform_loader_and_bus_share_the_effective_dram_window() {
-        let mut platform = Platform::new(Memory::with_size((DRAM_SIZE * 2) as usize));
-        let last_byte = DRAM_BASE + DRAM_SIZE - 1;
+    fn custom_layout_uses_one_dram_window_for_loads_and_accesses() {
+        let layout = DramLayout::new(TEST_CUSTOM_DRAM_BASE, TEST_DRAM_BYTES).unwrap();
+        let mut platform = Platform::with_layout(layout).unwrap();
+        let last_byte = layout.end() - 1;
         platform
             .load_bytes(last_byte, &[0xaa], MemoryType::Cacheable)
             .unwrap();
 
-        let first_byte_outside = DRAM_BASE + DRAM_SIZE;
+        assert_eq!(
+            platform
+                .read_u8(layout.base(), MemoryType::Cacheable)
+                .unwrap(),
+            0
+        );
+        let first_byte_outside = layout.end();
         assert_eq!(
             platform.load_bytes(first_byte_outside, &[0xbb], MemoryType::Cacheable),
             Err(Trap::AccessFault)
@@ -701,6 +776,25 @@ mod tests {
             platform.read_u8(last_byte, MemoryType::Cacheable).unwrap(),
             0xaa
         );
+    }
+
+    #[test]
+    fn custom_dram_layout_rejects_mmio_overlap() {
+        for (base, size) in [
+            (SYSCON_BASE, DRAM_PAGE_BYTES),
+            (CLINT_BASE, DRAM_PAGE_BYTES),
+            (PLIC_BASE, DRAM_PAGE_BYTES),
+            (UART_BASE, DRAM_PAGE_BYTES),
+        ] {
+            let layout = DramLayout::new(base, size).unwrap();
+            assert!(
+                matches!(
+                    Platform::with_layout(layout),
+                    Err(PlatformInitError::OverlapsMmio(_))
+                ),
+                "{base:#x}"
+            );
+        }
     }
 
     #[test]

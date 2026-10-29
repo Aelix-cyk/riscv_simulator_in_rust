@@ -16,7 +16,7 @@ excluded), **N/A** (the row does not apply).
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
 | Hart count and topology | One hart, hart ID 0, supporting M, S, and U privilege modes | Decided |
-| Reset PC, the platform's boot address | `DRAM_BASE` (`0x8000_0000`); images link and load there | Decided |
+| Reset PC, the platform's boot address | Configured DRAM base, defaulting to `0x8000_0000`; images link and load there | Decided |
 | Reset value of GPRs and CSRs | All zero | Decided |
 | IALIGN | 16; Zca provides compressed instructions, so branch and jump targets need only be two-byte aligned | Decided |
 | Behaviour on a misaligned instruction address | Raise an instruction-address-misaligned exception when the PC or control-transfer target is not two-byte aligned | Decided |
@@ -28,7 +28,7 @@ excluded), **N/A** (the row does not apply).
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| DRAM base and size | `0x8000_0000`, currently 1 MiB; the size may grow — the spec fixes no addresses | Decided |
+| DRAM base and size | Configurable from the CLI; defaults to `0x8000_0000` and 128 MiB. Both are 4 KiB-aligned, must fit the 57-bit physical address space, and may not overlap MMIO | Decided |
 | Page tables | Sv39 page tables are physically addressed and must reside in the cacheable initial DRAM region | Decided |
 | MMIO regions (UART, interrupt controller, debug module) | Syscon, CLINT, PLIC, and NS16550-compatible UART; no debug module | Decided |
 | PMA regions and attributes | The whole region is cacheable, coherent main memory, and accepts NC/I/O PBMT overrides | Decided |
@@ -113,7 +113,7 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 
 | Choice | Ours | Status |
 |---|---|---|
-| Program container | Flat binary, loaded at `DRAM_BASE` | Decided |
+| Program container | Flat binary, loaded at the configured DRAM base | Decided |
 | Program start | Entry is the load address; the CLI sets the PC there | Decided |
 | Address translation | Fetch and memory accesses use one central Bare/Sv39 path with per-byte translation for cross-page accesses | Decided |
 | Translation controls | `satp` supports Bare and Sv39 with a 16-bit ASID; `mstatus.TVM`, `SUM`, and `MXR` are writable; `SFENCE.VMA` and `SINVAL.VMA` honor ASID/VA forms | Decided |

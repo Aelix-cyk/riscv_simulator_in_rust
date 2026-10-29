@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::machine::{Machine, StepOptions};
-use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
+use riscv_simulator_in_rust::memory::{DRAM_BASE, DRAM_PAGE_BYTES, Memory};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -106,7 +106,7 @@ pub fn expected_failures() -> ExpectedFailures {
 /// Runs one ELF to its `tohost` completion or a bounded step limit.
 pub fn run_elf(elf: &Path) -> TestOutcome {
     let program = ExtractedProgram::new(elf);
-    let mut memory = Memory::new();
+    let mut memory = Memory::with_size(program.memory_bytes);
     memory
         .load_bytes(DRAM_BASE, &program.binary, MemoryType::Cacheable)
         .unwrap_or_else(|trap| panic!("cannot load {}: {trap:?}", elf.display()));
@@ -187,6 +187,7 @@ struct ExtractedProgram {
     binary: Vec<u8>,
     entry: u64,
     tohost: u64,
+    memory_bytes: usize,
     work_dir: PathBuf,
 }
 
@@ -210,12 +211,22 @@ impl ExtractedProgram {
                 .arg("-n")
                 .arg(elf),
         );
+        let binary = fs::read(&binary_path).expect("read extracted test binary");
+        let image_end = find_symbol(&symbols, "_end")
+            .and_then(|address| address.checked_sub(DRAM_BASE))
+            .unwrap_or(binary.len() as u64)
+            .max(binary.len() as u64);
+        let memory_bytes =
+            image_end.max(DRAM_PAGE_BYTES).div_ceil(DRAM_PAGE_BYTES) * DRAM_PAGE_BYTES;
+        let memory_bytes =
+            usize::try_from(memory_bytes).expect("compliance image fits the host address space");
         Self {
-            binary: fs::read(&binary_path).expect("read extracted test binary"),
+            binary,
             entry: find_symbol(&symbols, "_start")
                 .or_else(|| find_symbol(&symbols, "rvtest_entry_point"))
                 .unwrap_or_else(|| panic!("missing _start or rvtest_entry_point symbol")),
             tohost: symbol_address(&symbols, "tohost"),
+            memory_bytes,
             work_dir,
         }
     }

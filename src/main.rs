@@ -8,7 +8,6 @@ use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::cli::{self, Command, Options, USAGE};
 use riscv_simulator_in_rust::cpu::{ABI_NAMES, Cpu, FPR_COUNT};
 use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
-use riscv_simulator_in_rust::memory::{DRAM_BASE, Memory};
 use riscv_simulator_in_rust::platform::Platform;
 
 /// Exit code for usage and input errors.
@@ -52,11 +51,19 @@ fn run(options: &Options) -> ExitCode {
         }
     };
 
-    let mut machine = Machine::new(Platform::new(Memory::new()));
-    machine.cpu_mut().set_pc(DRAM_BASE);
-    if let Err(trap) = machine
-        .bus_mut()
-        .load_bytes(DRAM_BASE, &binary, MemoryType::Cacheable)
+    let platform = match Platform::with_layout(options.dram) {
+        Ok(platform) => platform,
+        Err(error) => {
+            eprintln!("invalid DRAM configuration: {error}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    let mut machine = Machine::new(platform);
+    machine.cpu_mut().set_pc(options.dram.base());
+    if let Err(trap) =
+        machine
+            .bus_mut()
+            .load_bytes(options.dram.base(), &binary, MemoryType::Cacheable)
     {
         eprintln!("cannot load {}: {trap:?}", options.binary.display());
         return ExitCode::from(EXIT_USAGE);
