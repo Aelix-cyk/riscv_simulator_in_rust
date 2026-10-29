@@ -2,13 +2,15 @@
 
 _Baseline:_ ratified RVA22 profiles release, Privileged Architecture 1.12
 
+Implementation scope is closed. Optional capabilities not listed as
+`Implemented` are permanently excluded from this simulator and are not deferred
+future work.
+
 Status values:
 
 - `Fixed` — mandated by the profile; nothing to decide.
 - `Implemented` — chosen and implemented.
-- `Not implemented` — chosen and deliberately omitted; a conformant answer for
-  an option.
-- `Undecided` — nobody has chosen yet. A working state, not a final one.
+- `Not implemented` — permanently excluded from the simulator's scope.
 - `N/A` — the row does not apply to this configuration.
 
 ## 1. Mandatory requirements
@@ -64,35 +66,36 @@ mandatory here by reference, so these rows gate conformance too.
 | Clause | Option | Status | Notes |
 |---|---|---|---|
 | RVA22U64 option | Zfh | Implemented | Half arithmetic, comparisons, classification, and conversions |
-| RVA22U64 option | V | Undecided | |
-| RVA22U64 option | Zkn | Undecided | |
-| RVA22U64 option | Zks | Undecided | |
+| RVA22U64 option | V | Not implemented | Permanently excluded |
+| RVA22U64 option | Zkn | Not implemented | Permanently excluded |
+| RVA22U64 option | Zks | Not implemented | Permanently excluded |
+| Beyond RVA22U64 | Zacas | Not implemented | Compare-and-swap operations are permanently excluded |
 
 ## 3. Optional privileged extensions
 
 | Clause | Option | Status | Notes |
 |---|---|---|---|
-| RVA22S64 option | Sv48 | Undecided | |
-| RVA22S64 option | Sv57 | Undecided | |
-| RVA22S64 option | Svnapot | Undecided | |
-| RVA22S64 option | Ssu64xl | Undecided | |
-| RVA22S64 option | Sstc | Undecided | Deliberately not mandatory: disruptive at system level |
-| RVA22S64 option | Sscofpmf | Undecided | Platforms may mandate it |
-| RVA22S64 option | Zkr | Undecided | |
-| RVA22S64 option | H (augmented) | Undecided | |
+| RVA22S64 option | Sv48 | Not implemented | Permanently excluded |
+| RVA22S64 option | Sv57 | Not implemented | Permanently excluded |
+| RVA22S64 option | Svnapot | Not implemented | Permanently excluded |
+| RVA22S64 option | Ssu64xl | Not implemented | Permanently excluded |
+| RVA22S64 option | Sstc | Not implemented | Permanently excluded |
+| RVA22S64 option | Sscofpmf | Not implemented | Permanently excluded |
+| RVA22S64 option | Zkr | Not implemented | Permanently excluded |
+| RVA22S64 option | H (augmented) | Not implemented | Permanently excluded |
 
 ## 4. Platform choices outside the profile
 
 | Area | Choice | Status | Notes |
 |---|---|---|---|
 | Cache geometry and coherence | No cache model | Implemented | 64-byte, naturally aligned architectural blocks |
-| PMP entries and granularity | | Undecided | |
+| PMP entries and granularity | No PMP entries | Not implemented | Permanently excluded |
 | PMA regions and attributes | One implicit cacheable region accepting PBMT NC/I/O overrides | Implemented | |
 | Interrupt controller | | Implemented | One-source PLIC with machine and supervisor contexts |
 | Timer facility | | Implemented | 64-bit CLINT `mtime` and `mtimecmp` |
-| Misaligned access outside cacheable, coherent main memory | | Undecided | Zicclsm already mandates main-memory support; this row covers other regions and performance |
+| Misaligned access outside cacheable, coherent main memory | No additional regions | Not implemented | Zicclsm main-memory support remains implemented |
 | Debug (per debug specification) | | Implemented | No trigger module; trigger CSRs report zero triggers |
-| Multi-hart topology | | Undecided | |
+| Multi-hart topology | One hart | Not implemented | Permanently excluded |
 
 ## 5. Recommendations
 

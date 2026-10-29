@@ -5,8 +5,11 @@ the implementation, with our current answer. The profile's own requirement rows
 live in `rva22s64-implementation-choices.md`; engineering decisions inside this
 codebase (decode table, benchmarks, CLI shape) are recorded in `docs/notes/`.
 
-Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A**
-(the row does not apply yet).
+Implementation scope is closed. Optional capabilities not listed as decided are
+permanently excluded and are not deferred future work.
+
+Status: **Decided** (fixed or implemented), **Not implemented** (permanently
+excluded), **N/A** (the row does not apply).
 
 ## 1. Reset state and hart configuration
 
@@ -25,12 +28,12 @@ Status: **Decided** (fixed or implemented), **Open** (nobody has chosen), **N/A*
 
 | Choice the spec leaves open | Ours | Status |
 |---|---|---|
-| DRAM base and size | `0x8000_0000`, 1 MiB — the spec fixes no addresses | Decided (will grow) |
+| DRAM base and size | `0x8000_0000`, currently 1 MiB; the size may grow — the spec fixes no addresses | Decided |
 | Page tables | Sv39 page tables are physically addressed and must reside in the cacheable initial DRAM region | Decided |
 | MMIO regions (UART, interrupt controller, debug module) | Syscon, CLINT, PLIC, and NS16550-compatible UART; no debug module | Decided |
 | PMA regions and attributes | The whole region is cacheable, coherent main memory, and accepts NC/I/O PBMT overrides | Decided |
-| PMP entries and granularity | None | Open |
-| Misaligned access outside cacheable, coherent main memory | Main memory supports misaligned access (Zicclsm); no other regions exist | Open |
+| PMP entries and granularity | None | Not implemented |
+| Misaligned access outside cacheable, coherent main memory | Main memory supports misaligned access (Zicclsm); no other regions exist | Not implemented |
 | Cache geometry and coherence | No cache model; architectural cache blocks are 64 bytes and naturally aligned | Decided |
 | Cache-block operations (Zicbom/bop/boz) | Management operations validate the full block and otherwise do nothing; `CBO.ZERO` preflights and clears the block; prefetches are untrapping hints | Decided |
 | CBO privilege controls | `menvcfg.CBZE`, `CBCFE`, and WARL `CBIE` gate S-mode operations; both `menvcfg` and `senvcfg` gate U-mode. M-mode is always enabled | Decided |
@@ -96,13 +99,13 @@ Same rows as section 4 of `rva22s64-implementation-choices.md`, with our answer:
 | Area | Ours |
 |---|---|
 | Cache geometry and coherence | No cache model; 64-byte, naturally aligned architectural blocks — Decided |
-| PMP entries and granularity | None — Open |
+| PMP entries and granularity | None — Not implemented |
 | PMA regions and attributes | One implicit cacheable region accepting PBMT NC/I/O overrides — Decided |
 | Interrupt controller | One-source PLIC for UART receive — Decided |
 | Timer facility | 64-bit CLINT machine timer — Decided |
-| Misaligned access outside main memory | No such regions yet — Open |
+| Misaligned access outside main memory | No such regions — Not implemented |
 | Debug | No trigger module; trigger CSRs report zero triggers — Decided |
-| Multi-hart topology | Single hart — Decided for now |
+| Multi-hart topology | Single hart — Not implemented |
 
 ## 7. Execution-environment interface
 
@@ -122,6 +125,7 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 
 ## 8. Optional extensions
 
-`V`, `Zkn`, `Zks`, `Sv48`, `Sv57`, `Svnapot`, `Ssu64xl`, `Sstc`,
-`Sscofpmf`, `Zkr`, and `H` (augmented) are still **Undecided** in the profile
-document; nothing here changes that yet.
+The following optional extensions are permanently **Not implemented**:
+`V`, `Zkn`, `Zks`, `Zacas`, `Sv48`, `Sv57`, `Svnapot`, `Ssu64xl`, `Sstc`,
+`Sscofpmf`, `Zkr`, and `H` (augmented). They are outside the simulator's final
+scope and will not be added as future work.
