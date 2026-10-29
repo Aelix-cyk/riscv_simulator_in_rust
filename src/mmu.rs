@@ -23,11 +23,15 @@ const PTE_PPN_SHIFT: u32 = 10;
 const PTE_PPN_MASK: u64 = (1 << 44) - 1;
 const PTE_PBMT_SHIFT: u32 = 61;
 const PTE_PBMT_MASK: u64 = 0b11 << PTE_PBMT_SHIFT;
-const PTE_RESERVED_MASK: u64 = ((1 << 10) - 1) << 54 & !PTE_PBMT_MASK;
+const PTE_RESERVED_MASK: u64 = (((1 << 10) - 1) << 54) & !PTE_PBMT_MASK;
 const PTE_BYTES: u64 = 8;
 const VPN_INDEX_MASK: u64 = (1 << VPN_BITS_PER_LEVEL) - 1;
 const ASID_MASK: u64 = SATP_ASID_MASK;
 const TLB_ENTRY_COUNT: usize = 64;
+const PBMT_PMA: u64 = 0;
+const PBMT_NC: u64 = 1;
+const PBMT_IO: u64 = 2;
+const PBMT_RESERVED: u64 = 3;
 
 /// Translation purpose for one memory access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,7 +252,10 @@ fn walk<B: Bus>(
         }
         global |= pte & PTE_GLOBAL != 0;
         if readable || executable {
-            if pbmt == 3 || (pbmt != 0 && !config.pbmt_enabled) {
+            let Some(memory_type) = pbmt_memory_type(pbmt) else {
+                return Err(fault(access, FaultKind::Page));
+            };
+            if pbmt != PBMT_PMA && !config.pbmt_enabled {
                 return Err(fault(access, FaultKind::Page));
             }
             let ppn = (pte >> PTE_PPN_SHIFT) & PTE_PPN_MASK;
@@ -269,21 +276,26 @@ fn walk<B: Bus>(
                 user: pte & PTE_USER != 0,
                 accessed: pte & PTE_ACCESSED != 0,
                 dirty: pte & PTE_DIRTY != 0,
-                memory_type: match pbmt {
-                    0 => MemoryType::Cacheable,
-                    1 => MemoryType::NonCacheable,
-                    2 => MemoryType::Io,
-                    _ => unreachable!("reserved PBMT value was rejected"),
-                },
+                memory_type,
             };
             return Ok(entry);
         }
-        if pte & (PTE_USER | PTE_ACCESSED | PTE_DIRTY) != 0 || pbmt != 0 {
+        if pte & (PTE_USER | PTE_ACCESSED | PTE_DIRTY) != 0 || pbmt != PBMT_PMA {
             return Err(fault(access, FaultKind::Page));
         }
         table = (pte >> PTE_PPN_SHIFT) & PTE_PPN_MASK;
     }
     Err(fault(access, FaultKind::Page))
+}
+
+fn pbmt_memory_type(pbmt: u64) -> Option<MemoryType> {
+    match pbmt {
+        PBMT_PMA => Some(MemoryType::Cacheable),
+        PBMT_NC => Some(MemoryType::NonCacheable),
+        PBMT_IO => Some(MemoryType::Io),
+        PBMT_RESERVED => None,
+        _ => None,
+    }
 }
 
 fn permits(entry: TlbEntry, config: Config, access: Access) -> bool {
@@ -546,7 +558,7 @@ mod tests {
 
         install_4k_mapping(
             &mut memory,
-            pte(DATA_PAGE, PTE_LEAF | (2 << PTE_PBMT_SHIFT)),
+            pte(DATA_PAGE, PTE_LEAF | (PBMT_IO << PTE_PBMT_SHIFT)),
         );
         assert_eq!(
             mmu.translate(&mut memory, pbmt_config, TEST_VA, Access::Load),
@@ -567,7 +579,7 @@ mod tests {
 
         install_4k_mapping(
             &mut memory,
-            pte(DATA_PAGE, PTE_LEAF | (1 << PTE_PBMT_SHIFT)),
+            pte(DATA_PAGE, PTE_LEAF | (PBMT_NC << PTE_PBMT_SHIFT)),
         );
         mmu.sfence_vma(None, None);
         assert_eq!(
@@ -578,7 +590,10 @@ mod tests {
             })
         );
 
-        install_4k_mapping(&mut memory, pte(DATA_PAGE, PTE_LEAF | PTE_PBMT_MASK));
+        install_4k_mapping(
+            &mut memory,
+            pte(DATA_PAGE, PTE_LEAF | (PBMT_RESERVED << PTE_PBMT_SHIFT)),
+        );
         mmu.sfence_vma(None, None);
         assert_eq!(
             mmu.translate(&mut memory, pbmt_config, TEST_VA, Access::Load),
@@ -587,6 +602,14 @@ mod tests {
                 kind: FaultKind::Page
             })
         );
+    }
+
+    #[test]
+    fn pbmt_encodings_map_to_memory_types_and_reserve_value_three() {
+        assert_eq!(pbmt_memory_type(PBMT_PMA), Some(MemoryType::Cacheable));
+        assert_eq!(pbmt_memory_type(PBMT_NC), Some(MemoryType::NonCacheable));
+        assert_eq!(pbmt_memory_type(PBMT_IO), Some(MemoryType::Io));
+        assert_eq!(pbmt_memory_type(PBMT_RESERVED), None);
     }
 
     #[test]
@@ -599,7 +622,7 @@ mod tests {
         memory
             .write_u64(
                 ROOT_TABLE,
-                pte(LEVEL_1_TABLE, PTE_NONLEAF | (1 << PTE_PBMT_SHIFT)),
+                pte(LEVEL_1_TABLE, PTE_NONLEAF | (PBMT_NC << PTE_PBMT_SHIFT)),
                 MemoryType::Cacheable,
             )
             .unwrap();
