@@ -83,10 +83,7 @@ pub trait Bus {
         width: u64,
         memory_type: MemoryType,
     ) -> Result<(), Trap> {
-        for offset in 0..width {
-            self.read_u8(offset_address(address, offset)?, memory_type)?;
-        }
-        Ok(())
+        check_write_bytes(self, address, width, memory_type)
     }
     /// Copies `bytes` starting at `address`.
     ///
@@ -114,6 +111,19 @@ pub trait Bus {
     fn exit_code(&self) -> Option<u8> {
         None
     }
+}
+
+/// Probes a write range using byte reads for buses without range metadata.
+pub(crate) fn check_write_bytes<B: Bus + ?Sized>(
+    bus: &mut B,
+    address: u64,
+    width: u64,
+    memory_type: MemoryType,
+) -> Result<(), Trap> {
+    for offset in 0..width {
+        bus.read_u8(offset_address(address, offset)?, memory_type)?;
+    }
+    Ok(())
 }
 
 /// Reads `N` bytes through [`Bus::read_u8`].

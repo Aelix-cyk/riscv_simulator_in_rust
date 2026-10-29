@@ -1,6 +1,7 @@
 use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::elf::{ElfError, ElfImage};
 use riscv_simulator_in_rust::memory::{DRAM_BASE, DramLayout, Memory};
+use riscv_simulator_in_rust::platform::Platform;
 
 const ELF_HEADER_BYTES: usize = 64;
 const PROGRAM_HEADER_BYTES: usize = 56;
@@ -16,11 +17,14 @@ const ELF_CURRENT_VERSION: u8 = 1;
 const ELF_EXECUTABLE: u16 = 2;
 const ELF_RISCV_MACHINE: u16 = 243;
 const PROGRAM_LOAD: u32 = 1;
+const PROGRAM_DYNAMIC: u32 = 2;
 const PROGRAM_INTERPRETER: u32 = 3;
 const PROGRAM_READ: u32 = 1 << 2;
 const PROGRAM_WRITE: u32 = 1 << 1;
 const PROGRAM_EXECUTE: u32 = 1 << 0;
 const PAGE_ALIGNMENT: u64 = 0x1000;
+const LARGE_DRAM_BYTES: u64 = 8 << 20;
+const LARGE_BSS_BYTES: u64 = 4 << 20;
 
 #[derive(Clone, Copy)]
 struct Segment {
@@ -197,6 +201,32 @@ fn rejects_dynamic_and_mismatched_segments() {
         Err(ElfError::DynamicExecutable)
     ));
 
+    let dynamic_without_interpreter = elf_with_segments(
+        DRAM_BASE,
+        &[
+            Segment::load(
+                FIRST_SEGMENT_OFFSET,
+                DRAM_BASE,
+                TEST_DATA_BYTES,
+                TEST_MEMORY_BYTES,
+                PROGRAM_READ | PROGRAM_EXECUTE,
+            ),
+            Segment {
+                kind: PROGRAM_DYNAMIC,
+                flags: PROGRAM_READ | PROGRAM_WRITE,
+                offset: SECOND_SEGMENT_OFFSET as u64,
+                virtual_address: 0,
+                physical_address: 0,
+                file_size: 0,
+                memory_size: 0,
+            },
+        ],
+    );
+    assert!(matches!(
+        ElfImage::parse(&dynamic_without_interpreter, test_layout()),
+        Err(ElfError::DynamicExecutable)
+    ));
+
     let mut mismatched = Segment::load(
         FIRST_SEGMENT_OFFSET,
         DRAM_BASE,
@@ -210,6 +240,34 @@ fn rejects_dynamic_and_mismatched_segments() {
         ElfImage::parse(&bytes, test_layout()),
         Err(ElfError::AddressMismatch)
     ));
+}
+
+#[test]
+fn loads_a_multi_megabyte_bss() {
+    let mut bytes = elf_with_segments(
+        DRAM_BASE,
+        &[Segment::load(
+            FIRST_SEGMENT_OFFSET,
+            DRAM_BASE,
+            TEST_DATA_BYTES,
+            LARGE_BSS_BYTES,
+            PROGRAM_READ | PROGRAM_EXECUTE,
+        )],
+    );
+    bytes[FIRST_SEGMENT_OFFSET..FIRST_SEGMENT_OFFSET + TEST_DATA_BYTES as usize]
+        .copy_from_slice(&[0x13, 0x05, 0x10, 0x00]);
+    let layout = DramLayout::new(DRAM_BASE, LARGE_DRAM_BYTES).unwrap();
+    let image = ElfImage::parse(&bytes, layout).unwrap();
+    let mut platform = Platform::with_layout(layout).unwrap();
+
+    image.load(&mut platform).unwrap();
+
+    assert_eq!(
+        platform
+            .read_u8(DRAM_BASE + LARGE_BSS_BYTES - 1, MemoryType::Cacheable)
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

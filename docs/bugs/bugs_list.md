@@ -28,3 +28,5 @@
 | [0024 — PLIC claim returns an already-claimed source](0024-plic-claim-returns-outstanding-id.md) | Fixed |
 | [0025 — platform loads bypass the effective DRAM window](0025-platform-load-bypasses-dram-window.md) | Fixed |
 | [0026 — Ssu64xl is documented as not implemented despite UXLEN=64](0026-ssu64xl-documented-as-not-implemented.md) | Fixed |
+| [0027 — ELF loader accepts dynamic executables without PT_INTERP](0027-elf-accepts-dynamic-without-interp.md) | Fixed |
+| [0028 — ELF segment preflight is byte-at-a-time](0028-elf-preflight-byte-at-a-time.md) | Fixed |

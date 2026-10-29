@@ -57,7 +57,9 @@ impl<'data> ElfImage<'data> {
         let mut segments = Vec::new();
         for program in file.elf_program_headers() {
             match program.p_type(endian) {
-                obj_elf::PT_INTERP => return Err(ElfError::DynamicExecutable),
+                obj_elf::PT_INTERP | obj_elf::PT_DYNAMIC => {
+                    return Err(ElfError::DynamicExecutable);
+                }
                 obj_elf::PT_LOAD => {
                     let virtual_address = program.p_vaddr(endian);
                     let physical_address = program.p_paddr(endian);

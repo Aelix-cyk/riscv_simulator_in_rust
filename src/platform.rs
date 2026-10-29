@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use crate::bus::{Bus, InterruptLines, MemoryType};
+use crate::bus::{Bus, InterruptLines, MemoryType, check_write_bytes};
 use crate::memory::{DramLayout, DramLayoutError, Memory, MemoryError};
 use crate::trap::Trap;
 
@@ -322,6 +322,19 @@ impl Bus for Platform {
         let length = bytes.len() as u64;
         self.dram_offset(address, length)?;
         self.memory.load_bytes(address, bytes, memory_type)
+    }
+
+    fn check_write(
+        &mut self,
+        address: u64,
+        width: u64,
+        memory_type: MemoryType,
+    ) -> Result<(), Trap> {
+        if self.dram_offset(address, width).is_ok() {
+            Ok(())
+        } else {
+            check_write_bytes(self, address, width, memory_type)
+        }
     }
 
     fn tick(&mut self) {
@@ -775,6 +788,24 @@ mod tests {
         assert_eq!(
             platform.read_u8(last_byte, MemoryType::Cacheable).unwrap(),
             0xaa
+        );
+    }
+
+    #[test]
+    fn dram_write_preflight_checks_whole_ranges_and_preserves_boundaries() {
+        let mut platform = platform();
+        let last_byte = DRAM_BASE + SMALL_MEMORY_BYTES as u64 - 1;
+
+        platform
+            .check_write(DRAM_BASE, SMALL_MEMORY_BYTES as u64, MemoryType::Cacheable)
+            .unwrap();
+        assert_eq!(
+            platform.check_write(last_byte, 2, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
+        );
+        assert_eq!(
+            platform.check_write(DRAM_BASE - 1, 2, MemoryType::Cacheable),
+            Err(Trap::AccessFault)
         );
     }
 
