@@ -80,6 +80,23 @@ const COUNTER_IR_BIT: u64 = 1 << 2;
 const HPM_COUNTER_FIRST: u16 = 3;
 const HPM_COUNTER_COUNT: usize = 3;
 const HPM_COUNTER_BITS: u64 = ((1 << HPM_COUNTER_COUNT) - 1) << HPM_COUNTER_FIRST;
+const PMP_ENTRY_COUNT: usize = 16;
+const PMP_ENTRIES_PER_CFG: usize = 8;
+const PMP_ADDRESS_BITS: u32 = 54;
+const PMP_ADDRESS_MASK: u64 = (1 << PMP_ADDRESS_BITS) - 1;
+const PMP_CFG_READ: u8 = 1 << 0;
+const PMP_CFG_WRITE: u8 = 1 << 1;
+const PMP_CFG_EXECUTE: u8 = 1 << 2;
+const PMP_CFG_ADDRESS_MASK: u8 = 0b11 << 3;
+const PMP_CFG_ADDRESS_OFF: u8 = 0;
+const PMP_CFG_ADDRESS_TOR: u8 = 1 << 3;
+const PMP_CFG_ADDRESS_NA4: u8 = 2 << 3;
+const PMP_CFG_ADDRESS_NAPOT: u8 = 3 << 3;
+const PMP_CFG_LOCK: u8 = 1 << 7;
+const PMP_CFG_FIELDS: u8 =
+    PMP_CFG_READ | PMP_CFG_WRITE | PMP_CFG_EXECUTE | PMP_CFG_ADDRESS_MASK | PMP_CFG_LOCK;
+const PMP_SHIFT: u32 = 2;
+const NA4_BYTES: u64 = 1 << PMP_SHIFT;
 const COUNTER_ENABLE_MASK: u64 =
     COUNTER_CY_BIT | COUNTER_TM_BIT | COUNTER_IR_BIT | HPM_COUNTER_BITS;
 const MCOUNTINHIBIT_CY_BIT: u64 = 1 << 0;
@@ -189,8 +206,8 @@ pub(crate) struct Csrs {
     mie: u64,
     medeleg: u64,
     mideleg: u64,
-    pmpcfg0: u64,
-    pmpaddr0: u64,
+    pmpcfg: [u64; PMP_ENTRY_COUNT / PMP_ENTRIES_PER_CFG],
+    pmpaddr: [u64; PMP_ENTRY_COUNT],
     mnstatus: u64,
     mip: u64,
     device_pending: u64,
@@ -253,8 +270,11 @@ impl Csrs {
             inst::CSR_STVAL => Some(self.stval),
             inst::CSR_SATP => Some(self.satp),
             inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => self.read_mhpmevent(address),
-            inst::CSR_PMPCFG0 => Some(self.pmpcfg0),
-            inst::CSR_PMPADDR0 => Some(self.pmpaddr0),
+            inst::CSR_PMPCFG0 => Some(self.pmpcfg[0]),
+            inst::CSR_PMPCFG2 => Some(self.pmpcfg[1]),
+            inst::CSR_PMPADDR0..=inst::CSR_PMPADDR15 => {
+                Some(self.pmpaddr[usize::from(address - inst::CSR_PMPADDR0)])
+            }
             inst::CSR_MNSTATUS => Some(self.mnstatus),
             inst::CSR_TCONTROL
             | inst::CSR_TSELECT
@@ -349,8 +369,14 @@ impl Csrs {
             inst::CSR_MHPMEVENT3..=inst::CSR_MHPMEVENT31 => {
                 self.write_mhpmevent(address, value);
             }
-            inst::CSR_PMPCFG0 => self.pmpcfg0 = value,
-            inst::CSR_PMPADDR0 => self.pmpaddr0 = value,
+            inst::CSR_PMPCFG0 => self.write_pmpcfg(0, value),
+            inst::CSR_PMPCFG2 => self.write_pmpcfg(1, value),
+            inst::CSR_PMPADDR0..=inst::CSR_PMPADDR15 => {
+                let index = usize::from(address - inst::CSR_PMPADDR0);
+                if !self.pmp_entry_locked(index) {
+                    self.pmpaddr[index] = value & PMP_ADDRESS_MASK;
+                }
+            }
             inst::CSR_MNSTATUS => self.mnstatus = value,
             // This hart has no debug triggers. The trigger CSRs remain
             // accessible so software can discover that zero triggers exist.
@@ -430,6 +456,93 @@ impl Csrs {
 
     fn is_read_only(address: u16) -> bool {
         (address >> CSR_READ_ONLY_SHIFT) & CSR_READ_ONLY_MASK == CSR_READ_ONLY
+    }
+
+    fn write_pmpcfg(&mut self, bank: usize, value: u64) {
+        let mut updated = self.pmpcfg[bank];
+        for byte_index in 0..PMP_ENTRIES_PER_CFG {
+            let shift = (byte_index * u8::BITS as usize) as u32;
+            let mask = u64::from(u8::MAX) << shift;
+            let old = ((self.pmpcfg[bank] & mask) >> shift) as u8;
+            if old & PMP_CFG_LOCK != 0 {
+                continue;
+            }
+            let new = ((value & mask) >> shift) as u8;
+            updated = (updated & !mask) | (u64::from(canonical_pmp_cfg(new)) << shift);
+        }
+        self.pmpcfg[bank] = updated;
+    }
+
+    fn pmp_config(self, index: usize) -> u8 {
+        let bank = index / PMP_ENTRIES_PER_CFG;
+        let within = index % PMP_ENTRIES_PER_CFG;
+        (self.pmpcfg[bank] >> (within * u8::BITS as usize)) as u8
+    }
+
+    fn pmp_entry_locked(self, index: usize) -> bool {
+        self.pmp_config(index) & PMP_CFG_LOCK != 0
+    }
+
+    /// Checks a physical access against the lowest-numbered matching PMP entry.
+    pub(crate) fn pmp_allows(
+        self,
+        address: u64,
+        privilege: PrivilegeMode,
+        read: bool,
+        write: bool,
+        execute: bool,
+    ) -> bool {
+        for index in 0..PMP_ENTRY_COUNT {
+            let config = self.pmp_config(index);
+            if config & PMP_CFG_ADDRESS_MASK == PMP_CFG_ADDRESS_OFF {
+                continue;
+            }
+            if privilege == PrivilegeMode::Machine && config & PMP_CFG_LOCK == 0 {
+                continue;
+            }
+            let Some((start, end)) = self.pmp_range(index, config) else {
+                continue;
+            };
+            if (start..end).contains(&address) {
+                return (!read || config & PMP_CFG_READ != 0)
+                    && (!write || config & PMP_CFG_WRITE != 0)
+                    && (!execute || config & PMP_CFG_EXECUTE != 0);
+            }
+        }
+        privilege == PrivilegeMode::Machine
+    }
+
+    fn pmp_range(self, index: usize, config: u8) -> Option<(u64, u64)> {
+        let address = self.pmpaddr[index];
+        match config & PMP_CFG_ADDRESS_MASK {
+            PMP_CFG_ADDRESS_OFF => None,
+            PMP_CFG_ADDRESS_TOR => {
+                let start = if index == 0 {
+                    0
+                } else {
+                    self.pmpaddr[index - 1] << PMP_SHIFT
+                };
+                let end = address << PMP_SHIFT;
+                (start < end).then_some((start, end))
+            }
+            PMP_CFG_ADDRESS_NA4 => {
+                let start = address << PMP_SHIFT;
+                Some((start, start + NA4_BYTES))
+            }
+            PMP_CFG_ADDRESS_NAPOT => {
+                let trailing_ones = (!address) & PMP_ADDRESS_MASK;
+                let trailing = if trailing_ones == 0 {
+                    PMP_ADDRESS_BITS
+                } else {
+                    trailing_ones.trailing_zeros()
+                };
+                let mask = (1_u64 << trailing) - 1;
+                let start = (address & !mask) << PMP_SHIFT;
+                let size = 1_u64 << (trailing + PMP_SHIFT + 1);
+                Some((start, start + size))
+            }
+            _ => None,
+        }
     }
 
     /// Whether `mstatus.FS` enables floating-point register accesses.
@@ -810,6 +923,14 @@ impl Csrs {
     }
 }
 
+fn canonical_pmp_cfg(value: u8) -> u8 {
+    let mut config = value & PMP_CFG_FIELDS;
+    if config & PMP_CFG_WRITE != 0 && config & PMP_CFG_READ == 0 {
+        config &= !PMP_CFG_WRITE;
+    }
+    config
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -835,8 +956,10 @@ mod tests {
         assert!(csrs.write(inst::CSR_STVAL, u64::MAX));
         assert!(csrs.write(inst::CSR_SCOUNTEREN, u64::MAX));
         assert!(csrs.write(inst::CSR_SENVCFG, u64::MAX));
-        assert!(csrs.write(inst::CSR_PMPCFG0, u64::MAX));
         assert!(csrs.write(inst::CSR_PMPADDR0, u64::MAX));
+        assert!(csrs.write(inst::CSR_PMPADDR15, u64::MAX));
+        assert!(csrs.write(inst::CSR_PMPCFG0, u64::MAX));
+        assert!(csrs.write(inst::CSR_PMPCFG2, u64::MAX));
         assert!(csrs.write(inst::CSR_MNSTATUS, u64::MAX));
 
         assert_eq!(
@@ -868,8 +991,13 @@ mod tests {
             csrs.read(inst::CSR_SENVCFG),
             Some(MENVCFG_CBIE_MASK | MENVCFG_CBCFE | MENVCFG_CBZE)
         );
-        assert_eq!(csrs.read(inst::CSR_PMPCFG0), Some(u64::MAX));
-        assert_eq!(csrs.read(inst::CSR_PMPADDR0), Some(u64::MAX));
+        let expected_pmpcfg = (0..PMP_ENTRIES_PER_CFG).fold(0, |value, index| {
+            value | (u64::from(canonical_pmp_cfg(u8::MAX)) << (index * u8::BITS as usize))
+        });
+        assert_eq!(csrs.read(inst::CSR_PMPCFG0), Some(expected_pmpcfg));
+        assert_eq!(csrs.read(inst::CSR_PMPCFG2), Some(expected_pmpcfg));
+        assert_eq!(csrs.read(inst::CSR_PMPADDR0), Some(PMP_ADDRESS_MASK));
+        assert_eq!(csrs.read(inst::CSR_PMPADDR15), Some(PMP_ADDRESS_MASK));
         assert_eq!(csrs.read(inst::CSR_MNSTATUS), Some(u64::MAX));
         assert_eq!(csrs.read(inst::CSR_SATP), Some(0));
     }
@@ -881,6 +1009,36 @@ mod tests {
         assert_eq!(csrs.read(inst::CSR_MIP), Some(0));
         assert!(csrs.write(inst::CSR_MIP, 1));
         assert_eq!(csrs.read(inst::CSR_MIP), Some(0));
+    }
+
+    #[test]
+    fn pmp_decodes_ranges_and_enforces_privilege() {
+        let mut csrs = Csrs::default();
+        let base = 0x1000;
+        assert!(csrs.write(inst::CSR_PMPADDR0, base >> PMP_SHIFT));
+        assert!(csrs.write(
+            inst::CSR_PMPCFG0,
+            u64::from(PMP_CFG_READ | PMP_CFG_ADDRESS_NA4)
+        ));
+
+        assert!(csrs.pmp_allows(base, PrivilegeMode::Supervisor, true, false, false));
+        assert!(!csrs.pmp_allows(base, PrivilegeMode::Supervisor, false, true, false));
+        assert!(!csrs.pmp_allows(
+            base + NA4_BYTES,
+            PrivilegeMode::Supervisor,
+            true,
+            false,
+            false
+        ));
+        assert!(csrs.pmp_allows(base + NA4_BYTES, PrivilegeMode::Machine, true, true, true));
+
+        assert!(csrs.write(
+            inst::CSR_PMPCFG0,
+            u64::from(PMP_CFG_READ | PMP_CFG_ADDRESS_NA4 | PMP_CFG_LOCK)
+        ));
+        assert!(!csrs.pmp_allows(base, PrivilegeMode::Machine, false, true, false));
+        assert!(csrs.write(inst::CSR_PMPCFG0, 0));
+        assert_ne!(csrs.read(inst::CSR_PMPCFG0), Some(0));
     }
 
     #[test]

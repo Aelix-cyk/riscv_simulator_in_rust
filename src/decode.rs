@@ -2676,6 +2676,11 @@ fn csr_name(csr: u16) -> String {
         inst::CSR_STVAL => "stval".to_owned(),
         inst::CSR_SIP => "sip".to_owned(),
         inst::CSR_SATP => "satp".to_owned(),
+        inst::CSR_PMPCFG0 => "pmpcfg0".to_owned(),
+        inst::CSR_PMPCFG2 => "pmpcfg2".to_owned(),
+        inst::CSR_PMPADDR0..=inst::CSR_PMPADDR15 => {
+            format!("pmpaddr{}", csr - inst::CSR_PMPADDR0)
+        }
         inst::CSR_FFLAGS => "fflags".to_owned(),
         inst::CSR_FRM => "frm".to_owned(),
         inst::CSR_FCSR => "fcsr".to_owned(),

@@ -3,11 +3,13 @@
 
 use std::fs;
 use std::io::Write;
+use std::path::Path;
 use std::process::ExitCode;
 
+use riscv_simulator_in_rust::boot;
 use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::cli::{self, Command, Options, ProgramInput, USAGE};
-use riscv_simulator_in_rust::cpu::{ABI_NAMES, Cpu, FPR_COUNT};
+use riscv_simulator_in_rust::cpu::{A0, A1, ABI_NAMES, Cpu, FPR_COUNT};
 use riscv_simulator_in_rust::elf::{ElfImage, is_elf};
 use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
 use riscv_simulator_in_rust::platform::Platform;
@@ -45,29 +47,6 @@ fn main() -> ExitCode {
 
 /// Loads the program, runs it, prints the final state, and picks an exit code.
 fn run(options: &Options) -> ExitCode {
-    let binary = match fs::read(options.input.path()) {
-        Ok(binary) => binary,
-        Err(error) => {
-            eprintln!("cannot read {}: {error}", options.input.path().display());
-            return ExitCode::from(EXIT_USAGE);
-        }
-    };
-
-    let elf = match &options.input {
-        ProgramInput::Flat(_) if is_elf(&binary) => {
-            eprintln!("ELF input must be supplied with --elf");
-            return ExitCode::from(EXIT_USAGE);
-        }
-        ProgramInput::Flat(_) => None,
-        ProgramInput::Elf(_) => match ElfImage::parse(&binary, options.dram) {
-            Ok(image) => Some(image),
-            Err(error) => {
-                eprintln!("cannot load {}: {error}", options.input.path().display());
-                return ExitCode::from(EXIT_USAGE);
-            }
-        },
-    };
-
     let platform = match Platform::with_layout(options.dram) {
         Ok(platform) => platform,
         Err(error) => {
@@ -76,22 +55,89 @@ fn run(options: &Options) -> ExitCode {
         }
     };
     let mut machine = Machine::new(platform);
-    let entry = if let Some(image) = elf {
-        if let Err(error) = image.load(machine.bus_mut()) {
-            eprintln!("cannot load {}: {error}", options.input.path().display());
-            return ExitCode::from(EXIT_USAGE);
+    let entry = match &options.input {
+        ProgramInput::Flat(path) => {
+            let binary = match read_input(path) {
+                Ok(binary) => binary,
+                Err(()) => return ExitCode::from(EXIT_USAGE),
+            };
+            if is_elf(&binary) {
+                eprintln!("ELF input must be supplied with --elf");
+                return ExitCode::from(EXIT_USAGE);
+            }
+            if let Err(trap) =
+                machine
+                    .bus_mut()
+                    .load_bytes(options.dram.base(), &binary, MemoryType::Cacheable)
+            {
+                eprintln!("cannot load {}: {trap:?}", path.display());
+                return ExitCode::from(EXIT_USAGE);
+            }
+            options.dram.base()
         }
-        image.entry()
-    } else {
-        if let Err(trap) =
-            machine
-                .bus_mut()
-                .load_bytes(options.dram.base(), &binary, MemoryType::Cacheable)
-        {
-            eprintln!("cannot load {}: {trap:?}", options.input.path().display());
-            return ExitCode::from(EXIT_USAGE);
+        ProgramInput::Elf(path) => {
+            let binary = match read_input(path) {
+                Ok(binary) => binary,
+                Err(()) => return ExitCode::from(EXIT_USAGE),
+            };
+            let image = match ElfImage::parse(&binary, options.dram) {
+                Ok(image) => image,
+                Err(error) => {
+                    eprintln!("cannot load {}: {error}", path.display());
+                    return ExitCode::from(EXIT_USAGE);
+                }
+            };
+            if let Err(error) = image.load(machine.bus_mut()) {
+                eprintln!("cannot load {}: {error}", path.display());
+                return ExitCode::from(EXIT_USAGE);
+            }
+            image.entry()
         }
-        options.dram.base()
+        ProgramInput::Boot(boot_input) => {
+            let firmware = match read_input(&boot_input.firmware) {
+                Ok(binary) => binary,
+                Err(()) => return ExitCode::from(EXIT_USAGE),
+            };
+            let device_tree = match read_input(&boot_input.device_tree) {
+                Ok(binary) => binary,
+                Err(()) => return ExitCode::from(EXIT_USAGE),
+            };
+            let kernel = match read_input(&boot_input.kernel) {
+                Ok(binary) => binary,
+                Err(()) => return ExitCode::from(EXIT_USAGE),
+            };
+            let firmware =
+                match ElfImage::parse_firmware(&firmware, options.dram, options.dram.base()) {
+                    Ok(image) => image,
+                    Err(error) => {
+                        eprintln!("cannot load {}: {error}", boot_input.firmware.display());
+                        return ExitCode::from(EXIT_USAGE);
+                    }
+                };
+            let kernel = match ElfImage::parse(&kernel, options.dram) {
+                Ok(image) => image,
+                Err(error) => {
+                    eprintln!("cannot load {}: {error}", boot_input.kernel.display());
+                    return ExitCode::from(EXIT_USAGE);
+                }
+            };
+            let info = match boot::load(
+                options.dram,
+                &firmware,
+                &device_tree,
+                &kernel,
+                machine.bus_mut(),
+            ) {
+                Ok(info) => info,
+                Err(error) => {
+                    eprintln!("cannot boot firmware: {error}");
+                    return ExitCode::from(EXIT_USAGE);
+                }
+            };
+            machine.cpu_mut().write_gpr(A0, info.hart_id);
+            machine.cpu_mut().write_gpr(A1, info.device_tree_address);
+            info.entry
+        }
     };
     machine.cpu_mut().set_pc(entry);
 
@@ -129,6 +175,12 @@ fn run(options: &Options) -> ExitCode {
             ExitCode::from(EXIT_STEP_LIMIT)
         }
     }
+}
+
+fn read_input(path: &Path) -> Result<Vec<u8>, ()> {
+    fs::read(path).map_err(|error| {
+        eprintln!("cannot read {}: {error}", path.display());
+    })
 }
 
 /// Prints the general-purpose registers by ABI name.

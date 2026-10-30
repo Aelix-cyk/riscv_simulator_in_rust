@@ -15,6 +15,7 @@ const ELF_64_CLASS: u8 = 2;
 const ELF_LITTLE_ENDIAN: u8 = 1;
 const ELF_CURRENT_VERSION: u8 = 1;
 const ELF_EXECUTABLE: u16 = 2;
+const ELF_SHARED_OBJECT: u16 = 3;
 const ELF_RISCV_MACHINE: u16 = 243;
 const PROGRAM_LOAD: u32 = 1;
 const PROGRAM_DYNAMIC: u32 = 2;
@@ -64,12 +65,16 @@ fn write_u64(bytes: &mut [u8], offset: usize, value: u64) {
 }
 
 fn elf_with_segments(entry: u64, segments: &[Segment]) -> Vec<u8> {
+    elf_with_type(entry, ELF_EXECUTABLE, segments)
+}
+
+fn elf_with_type(entry: u64, file_type: u16, segments: &[Segment]) -> Vec<u8> {
     let mut bytes = vec![0; TEST_FILE_BYTES];
     bytes[..4].copy_from_slice(b"\x7fELF");
     bytes[4] = ELF_64_CLASS;
     bytes[5] = ELF_LITTLE_ENDIAN;
     bytes[6] = ELF_CURRENT_VERSION;
-    write_u16(&mut bytes, 16, ELF_EXECUTABLE);
+    write_u16(&mut bytes, 16, file_type);
     write_u16(&mut bytes, 18, ELF_RISCV_MACHINE);
     write_u32(&mut bytes, 20, u32::from(ELF_CURRENT_VERSION));
     write_u64(&mut bytes, 24, entry);
@@ -90,6 +95,70 @@ fn elf_with_segments(entry: u64, segments: &[Segment]) -> Vec<u8> {
         write_u64(&mut bytes, offset + 48, PAGE_ALIGNMENT);
     }
     bytes
+}
+
+#[test]
+fn firmware_accepts_static_pie_but_regular_loads_do_not() {
+    let bytes = elf_with_type(
+        0,
+        ELF_SHARED_OBJECT,
+        &[
+            Segment::load(
+                FIRST_SEGMENT_OFFSET,
+                0,
+                TEST_DATA_BYTES,
+                TEST_MEMORY_BYTES,
+                PROGRAM_READ | PROGRAM_EXECUTE,
+            ),
+            Segment {
+                kind: PROGRAM_DYNAMIC,
+                flags: PROGRAM_READ,
+                offset: SECOND_SEGMENT_OFFSET as u64,
+                virtual_address: 0,
+                physical_address: 0,
+                file_size: 0,
+                memory_size: 0,
+            },
+        ],
+    );
+
+    assert!(matches!(
+        ElfImage::parse(&bytes, test_layout()),
+        Err(ElfError::UnsupportedType)
+    ));
+    let image = ElfImage::parse_firmware(&bytes, test_layout(), DRAM_BASE).unwrap();
+    assert_eq!(image.entry(), DRAM_BASE);
+    assert_eq!(
+        image.segment_ranges().next(),
+        Some((DRAM_BASE, DRAM_BASE + TEST_MEMORY_BYTES))
+    );
+
+    let bytes = elf_with_type(
+        0,
+        ELF_SHARED_OBJECT,
+        &[
+            Segment::load(
+                FIRST_SEGMENT_OFFSET,
+                0,
+                TEST_DATA_BYTES,
+                TEST_MEMORY_BYTES,
+                PROGRAM_READ | PROGRAM_EXECUTE,
+            ),
+            Segment {
+                kind: PROGRAM_INTERPRETER,
+                flags: PROGRAM_READ,
+                offset: SECOND_SEGMENT_OFFSET as u64,
+                virtual_address: 0,
+                physical_address: 0,
+                file_size: 0,
+                memory_size: 0,
+            },
+        ],
+    );
+    assert!(matches!(
+        ElfImage::parse_firmware(&bytes, test_layout(), DRAM_BASE),
+        Err(ElfError::DynamicExecutable)
+    ));
 }
 
 fn valid_elf() -> Vec<u8> {
@@ -284,7 +353,7 @@ fn rejects_bad_ranges_overlaps_and_truncated_data() {
     );
     assert!(matches!(
         ElfImage::parse(&outside, test_layout()),
-        Err(ElfError::OutOfDram)
+        Err(ElfError::OutOfDram { .. })
     ));
 
     let overlapping = elf_with_segments(

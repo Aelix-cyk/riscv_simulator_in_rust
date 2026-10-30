@@ -90,7 +90,7 @@ mandatory here by reference, so these rows gate conformance too.
 |---|---|---|---|
 | DRAM base and size | Configurable from the CLI | Implemented | Defaults to 128 MiB at `0x8000_0000`; validated to 4 KiB alignment, 57-bit physical addressing, and non-overlapping MMIO |
 | Cache geometry and coherence | No cache model | Implemented | 64-byte, naturally aligned architectural blocks |
-| PMP entries and granularity | No PMP entries | Not implemented | Permanently excluded |
+| PMP entries and granularity | 16 PMP entries with TOR/NA4/NAPOT ranges, lock bits, and R/W/X enforcement | Implemented | 54-bit addresses; 4-byte granularity |
 | PMA regions and attributes | One implicit cacheable region accepting PBMT NC/I/O overrides | Implemented | |
 | Interrupt controller | | Implemented | One-source PLIC with machine and supervisor contexts |
 | Timer facility | | Implemented | 64-bit CLINT `mtime` and `mtimecmp` |

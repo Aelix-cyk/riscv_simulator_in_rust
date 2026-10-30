@@ -32,7 +32,7 @@ excluded), **N/A** (the row does not apply).
 | Page tables | Sv39 page tables are physically addressed and must reside in the cacheable initial DRAM region | Decided |
 | MMIO regions (UART, interrupt controller, debug module) | Syscon, CLINT, PLIC, and NS16550-compatible UART; no debug module | Decided |
 | PMA regions and attributes | The whole region is cacheable, coherent main memory, and accepts NC/I/O PBMT overrides | Decided |
-| PMP entries and granularity | None | Not implemented |
+| PMP entries and granularity | 16 entries, 54-bit addresses, 4-byte granularity; TOR, NA4, NAPOT, lock, and R/W/X enforcement | Decided |
 | Misaligned access outside cacheable, coherent main memory | Main memory supports misaligned access (Zicclsm); no other regions exist | Not implemented |
 | Cache geometry and coherence | No cache model; architectural cache blocks are 64 bytes and naturally aligned | Decided |
 | Cache-block operations (Zicbom/bop/boz) | Management operations validate the full block and otherwise do nothing; `CBO.ZERO` preflights and clears the block; prefetches are untrapping hints | Decided |
@@ -99,7 +99,7 @@ Same rows as section 4 of `rva22s64-implementation-choices.md`, with our answer:
 | Area | Ours |
 |---|---|
 | Cache geometry and coherence | No cache model; 64-byte, naturally aligned architectural blocks — Decided |
-| PMP entries and granularity | None — Not implemented |
+| PMP entries and granularity | 16 entries, 54-bit addresses, 4-byte granularity — Implemented |
 | PMA regions and attributes | One implicit cacheable region accepting PBMT NC/I/O overrides — Decided |
 | Interrupt controller | One-source PLIC for UART receive — Decided |
 | Timer facility | 64-bit CLINT machine timer — Decided |

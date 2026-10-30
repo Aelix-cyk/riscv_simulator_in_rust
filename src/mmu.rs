@@ -136,12 +136,25 @@ impl Default for Mmu {
 
 impl Mmu {
     /// Translates one virtual address.
+    #[cfg(test)]
     pub(crate) fn translate<B: Bus>(
         &mut self,
         bus: &mut B,
         config: Config,
         virtual_address: u64,
         access: Access,
+    ) -> Result<Translation, Fault> {
+        self.translate_checked(bus, config, virtual_address, access, |_| true)
+    }
+
+    /// Translates one address while enforcing PMP on implicit page-table reads.
+    pub(crate) fn translate_checked<B: Bus, F: Fn(u64) -> bool>(
+        &mut self,
+        bus: &mut B,
+        config: Config,
+        virtual_address: u64,
+        access: Access,
+        pmp_read_allows: F,
     ) -> Result<Translation, Fault> {
         let mode = (config.satp >> SATP_MODE_SHIFT) & 0xf;
         if config.privilege == PrivilegeMode::Machine || mode == 0 {
@@ -163,7 +176,13 @@ impl Mmu {
         {
             entry
         } else {
-            self.insert(walk(bus, config, virtual_address, access)?)
+            self.insert(walk(
+                bus,
+                config,
+                virtual_address,
+                access,
+                &pmp_read_allows,
+            )?)
         };
 
         if !permits(entry, config, access) {
@@ -225,11 +244,12 @@ impl Mmu {
     }
 }
 
-fn walk<B: Bus>(
+fn walk<B: Bus, F: Fn(u64) -> bool>(
     bus: &mut B,
     config: Config,
     virtual_address: u64,
     access: Access,
+    pmp_read_allows: &F,
 ) -> Result<TlbEntry, Fault> {
     let asid = (config.satp >> SATP_ASID_SHIFT) & ASID_MASK;
     let mut table = config.satp & PTE_PPN_MASK;
@@ -237,6 +257,9 @@ fn walk<B: Bus>(
     for level in (0..SV39_LEVELS).rev() {
         let index = vpn_index(virtual_address, level);
         let address = (table << PAGE_BITS).wrapping_add(index * PTE_BYTES);
+        if !pmp_read_allows(address) {
+            return Err(fault(access, FaultKind::Access));
+        }
         let pte = bus
             .read_u64(address, MemoryType::Cacheable)
             .map_err(|_| fault(access, FaultKind::Access))?;

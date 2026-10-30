@@ -17,6 +17,12 @@ pub const RA: u8 = 1;
 /// Index of the stack-pointer register, `x2`.
 pub const SP: u8 = 2;
 
+/// Index of the first integer argument register, `x10`.
+pub const A0: usize = 10;
+
+/// Index of the second integer argument register, `x11`.
+pub const A1: usize = 11;
+
 /// Privilege mode currently executing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivilegeMode {

@@ -16,6 +16,10 @@ _start:
 	csrw	mepc, t0
 	li	t0, 0x800              # mstatus.MPP = S.
 	csrw	mstatus, t0
+	li	t3, -1
+	csrw	pmpaddr0, t3
+	li	t3, 0x1f               # NAPOT, read/write/execute.
+	csrw	pmpcfg0, t3
 	mret
 
 machine_trap:

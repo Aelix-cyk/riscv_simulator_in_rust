@@ -41,13 +41,27 @@ pub enum ProgramInput {
     Flat(PathBuf),
     /// Static ELF64 executable.
     Elf(PathBuf),
+    /// OpenSBI firmware, device tree, and next-stage kernel.
+    Boot(BootInput),
+}
+
+/// Inputs for an OpenSBI firmware boot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootInput {
+    /// Static ELF64 OpenSBI firmware image.
+    pub firmware: PathBuf,
+    /// Flattened device-tree blob for the QEMU-virt-compatible platform.
+    pub device_tree: PathBuf,
+    /// Static ELF64 image entered by the firmware.
+    pub kernel: PathBuf,
 }
 
 impl ProgramInput {
-    /// Returns the selected image path.
-    pub fn path(&self) -> &Path {
+    /// Returns the path for a single-image input.
+    pub fn single_path(&self) -> Option<&Path> {
         match self {
-            Self::Flat(path) | Self::Elf(path) => path,
+            Self::Flat(path) | Self::Elf(path) => Some(path),
+            Self::Boot(_) => None,
         }
     }
 }
@@ -55,17 +69,26 @@ impl ProgramInput {
 /// Steps a run takes before giving up, unless `--max-steps` says otherwise.
 pub const DEFAULT_MAX_STEPS: u64 = 10_000;
 
+/// Steps a firmware boot takes before giving up.
+pub const OPENSBI_DEFAULT_MAX_STEPS: u64 = 10_000_000;
+
 /// Usage text, printed for `--help` and for bad arguments.
 pub const USAGE: &str = "\
 usage: riscv_simulator_in_rust --binary <FILE> [--trace] [--max-steps <N>]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
        riscv_simulator_in_rust --elf <FILE> [--trace] [--max-steps <N>]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
+       riscv_simulator_in_rust --firmware <ELF> --dtb <FILE> --kernel <ELF>
+       [--trace] [--max-steps <N>] [--dram-base <ADDRESS>]
+       [--dram-size <SIZE>]
 
   --binary <FILE>   flat binary to load at the configured DRAM base and run
   --elf <FILE>      static RV64 ELF executable to load and run
+  --firmware <ELF>  OpenSBI static RV64 ELF firmware to boot
+  --dtb <FILE>      flattened device tree passed to OpenSBI
+  --kernel <ELF>    static RV64 ELF image entered by OpenSBI
   --trace           print each executed instruction
-  --max-steps <N>   stop after N steps (default 10000)
+  --max-steps <N>   stop after N steps (default 10000; OpenSBI boot 10000000)
   --dram-base <ADDRESS>  DRAM base (default 0x80000000)
   --dram-size <SIZE>     DRAM size (default 128MiB)
   --help            print this help
@@ -79,9 +102,12 @@ where
     let mut args = args.into_iter();
     let mut input = None;
     let mut trace = false;
-    let mut max_steps = DEFAULT_MAX_STEPS;
+    let mut max_steps = None;
     let mut dram_base = DramLayout::default().base();
     let mut dram_size = DramLayout::default().size();
+    let mut firmware = None;
+    let mut device_tree = None;
+    let mut kernel = None;
 
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -93,12 +119,23 @@ where
                 let value = args.next().ok_or("--elf needs a file")?;
                 set_input(&mut input, ProgramInput::Elf(PathBuf::from(value)))?;
             }
+            "--firmware" => {
+                set_option_path(&mut firmware, "--firmware", args.next())?;
+            }
+            "--dtb" => {
+                set_option_path(&mut device_tree, "--dtb", args.next())?;
+            }
+            "--kernel" => {
+                set_option_path(&mut kernel, "--kernel", args.next())?;
+            }
             "--trace" => trace = true,
             "--max-steps" => {
                 let value = args.next().ok_or("--max-steps needs a number")?;
-                max_steps = value
-                    .parse()
-                    .map_err(|_| format!("--max-steps: {value:?} is not a number"))?;
+                max_steps = Some(
+                    value
+                        .parse()
+                        .map_err(|_| format!("--max-steps: {value:?} is not a number"))?,
+                );
             }
             "--dram-base" => {
                 let value = args.next().ok_or("--dram-base needs an address")?;
@@ -113,7 +150,26 @@ where
         }
     }
 
-    let input = input.ok_or("--binary <FILE> or --elf <FILE> is required")?;
+    let has_boot_input = firmware.is_some() || device_tree.is_some() || kernel.is_some();
+    if input.is_some() && has_boot_input {
+        return Err(
+            "--firmware/--dtb/--kernel cannot be combined with --binary or --elf".to_owned(),
+        );
+    }
+    let input = if has_boot_input {
+        ProgramInput::Boot(BootInput {
+            firmware: firmware.ok_or("--firmware needs a file")?,
+            device_tree: device_tree.ok_or("--dtb needs a file")?,
+            kernel: kernel.ok_or("--kernel needs a file")?,
+        })
+    } else {
+        input.ok_or("--binary, --elf, or a complete OpenSBI boot input is required")?
+    };
+    let max_steps = max_steps.unwrap_or(if matches!(input, ProgramInput::Boot(_)) {
+        OPENSBI_DEFAULT_MAX_STEPS
+    } else {
+        DEFAULT_MAX_STEPS
+    });
     let dram = DramLayout::new(dram_base, dram_size)
         .map_err(|error| format!("invalid DRAM layout: {error}"))?;
     Ok(Command::Run(Options {
@@ -129,6 +185,20 @@ fn set_input(input: &mut Option<ProgramInput>, value: ProgramInput) -> Result<()
         return Err("only one of --binary or --elf may be supplied".to_owned());
     }
     *input = Some(value);
+    Ok(())
+}
+
+fn set_option_path(
+    slot: &mut Option<PathBuf>,
+    option: &str,
+    value: Option<String>,
+) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{option} may only be supplied once"));
+    }
+    *slot = Some(PathBuf::from(
+        value.ok_or_else(|| format!("{option} needs a file"))?,
+    ));
     Ok(())
 }
 
@@ -191,6 +261,61 @@ mod tests {
         assert!(parse_args(&["--binary", "program.bin", "--elf", "program.elf"]).is_err());
         assert!(parse_args(&["--elf", "program.elf", "--binary", "program.bin"]).is_err());
         assert!(parse_args(&["--elf"]).is_err());
+    }
+
+    #[test]
+    fn opensbi_boot_inputs_are_parsed_as_one_mode() {
+        let command = parse_args(&[
+            "--firmware",
+            "fw_jump.elf",
+            "--dtb",
+            "virt.dtb",
+            "--kernel",
+            "probe.elf",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command,
+            Command::Run(Options {
+                input: ProgramInput::Boot(BootInput {
+                    firmware: PathBuf::from("fw_jump.elf"),
+                    device_tree: PathBuf::from("virt.dtb"),
+                    kernel: PathBuf::from("probe.elf"),
+                }),
+                trace: false,
+                max_steps: OPENSBI_DEFAULT_MAX_STEPS,
+                dram: DramLayout::default(),
+            })
+        );
+    }
+
+    #[test]
+    fn opensbi_boot_inputs_require_every_image_and_exclude_single_image_modes() {
+        for arguments in [
+            vec!["--firmware", "fw_jump.elf"],
+            vec!["--firmware", "fw_jump.elf", "--dtb", "virt.dtb"],
+            vec![
+                "--firmware",
+                "fw_jump.elf",
+                "--dtb",
+                "virt.dtb",
+                "--kernel",
+                "probe.elf",
+                "--elf",
+                "program.elf",
+            ],
+            vec![
+                "--binary",
+                "program.bin",
+                "--kernel",
+                "probe.elf",
+                "--dtb",
+                "virt.dtb",
+            ],
+        ] {
+            assert!(parse_args(&arguments).is_err(), "{arguments:?}");
+        }
     }
 
     #[test]

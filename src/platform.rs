@@ -275,9 +275,8 @@ impl Default for Platform {
 
 impl Bus for Platform {
     fn read_u8(&mut self, address: u64, memory_type: MemoryType) -> Result<u8, Trap> {
-        if let Some(offset) = offset_in(address, SYSCON_BASE, SYSCON_SIZE) {
-            let _ = offset;
-            return Err(Trap::AccessFault);
+        if offset_in(address, SYSCON_BASE, SYSCON_SIZE).is_some() {
+            return Ok(0);
         }
         if let Some(offset) = offset_in(address, CLINT_BASE, CLINT_SIZE) {
             return self.read_clint_u8(offset);
@@ -831,6 +830,11 @@ mod tests {
     #[test]
     fn syscon_reports_pass_and_failure_exit_status() {
         let mut pass = platform();
+        assert_eq!(
+            pass.read_u32(SYSCON_BASE, MemoryType::Io).unwrap(),
+            0,
+            "syscon must support the read-modify-write used by firmware reset"
+        );
         pass.write_u32(SYSCON_BASE, u32::from(SYSCON_PASS), MemoryType::Io)
             .unwrap();
         assert_eq!(pass.exit_code(), Some(0));

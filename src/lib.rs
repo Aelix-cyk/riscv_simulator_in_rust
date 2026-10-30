@@ -1,5 +1,6 @@
 //! A RISC-V simulator built progressively around the RVA22S64 profile.
 
+pub mod boot;
 pub mod bus;
 pub mod cli;
 pub mod cpu;

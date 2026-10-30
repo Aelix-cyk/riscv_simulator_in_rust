@@ -37,6 +37,28 @@ struct ElfSegment<'data> {
 impl<'data> ElfImage<'data> {
     /// Parses and validates a static RV64 little-endian executable.
     pub fn parse(image: &'data [u8], dram: DramLayout) -> Result<Self, ElfError> {
+        Self::parse_with_bias(image, dram, None)
+    }
+
+    /// Parses static executable or relocatable PIE firmware.
+    ///
+    /// OpenSBI firmware is linked as an `ET_DYN` PIE and relocates itself before
+    /// installing its trap handlers. It still must not depend on an interpreter
+    /// or dynamic linker. A `PT_DYNAMIC` segment is permitted because static PIE
+    /// firmware uses it for self-relocation metadata.
+    pub fn parse_firmware(
+        image: &'data [u8],
+        dram: DramLayout,
+        load_address: u64,
+    ) -> Result<Self, ElfError> {
+        Self::parse_with_bias(image, dram, Some(load_address))
+    }
+
+    fn parse_with_bias(
+        image: &'data [u8],
+        dram: DramLayout,
+        firmware_load_address: Option<u64>,
+    ) -> Result<Self, ElfError> {
         if !is_elf(image) {
             return Err(ElfError::NotElf);
         }
@@ -47,7 +69,10 @@ impl<'data> ElfImage<'data> {
         if ident.class != obj_elf::ELFCLASS64 || ident.data != obj_elf::ELFDATA2LSB {
             return Err(ElfError::UnsupportedFormat);
         }
-        if header.e_type(endian) != obj_elf::ET_EXEC {
+        let file_type = header.e_type(endian);
+        let file_type_supported = file_type == obj_elf::ET_EXEC
+            || firmware_load_address.is_some() && file_type == obj_elf::ET_DYN;
+        if !file_type_supported {
             return Err(ElfError::UnsupportedType);
         }
         if header.e_machine(endian) != obj_elf::EM_RISCV {
@@ -57,7 +82,10 @@ impl<'data> ElfImage<'data> {
         let mut segments = Vec::new();
         for program in file.elf_program_headers() {
             match program.p_type(endian) {
-                obj_elf::PT_INTERP | obj_elf::PT_DYNAMIC => {
+                obj_elf::PT_INTERP => {
+                    return Err(ElfError::DynamicExecutable);
+                }
+                obj_elf::PT_DYNAMIC if firmware_load_address.is_none() => {
                     return Err(ElfError::DynamicExecutable);
                 }
                 obj_elf::PT_LOAD => {
@@ -66,22 +94,35 @@ impl<'data> ElfImage<'data> {
                     if virtual_address != physical_address {
                         return Err(ElfError::AddressMismatch);
                     }
+                    let image_bias = if file_type == obj_elf::ET_DYN {
+                        firmware_load_address.unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    let loaded_address = virtual_address
+                        .checked_add(image_bias)
+                        .ok_or(ElfError::AddressOverflow)?;
                     let file_size = program.p_filesz(endian);
                     let memory_size = program.p_memsz(endian);
                     if file_size > memory_size {
                         return Err(ElfError::InvalidSegmentSize);
                     }
-                    let end = virtual_address
+                    let end = loaded_address
                         .checked_add(memory_size)
                         .ok_or(ElfError::AddressOverflow)?;
-                    if virtual_address < dram.base() || end > dram.end() {
-                        return Err(ElfError::OutOfDram);
+                    if loaded_address < dram.base() || end > dram.end() {
+                        return Err(ElfError::OutOfDram {
+                            start: loaded_address,
+                            end,
+                            dram_start: dram.base(),
+                            dram_end: dram.end(),
+                        });
                     }
                     let file_data = program
                         .data(endian, image)
                         .map_err(|_| ElfError::InvalidSegmentData)?;
                     segments.push(ElfSegment {
-                        address: virtual_address,
+                        address: loaded_address,
                         file_data,
                         memory_size,
                         flags: program.p_flags(endian),
@@ -107,7 +148,15 @@ impl<'data> ElfImage<'data> {
             }
         }
 
-        let entry = header.e_entry(endian);
+        let entry_bias = if file_type == obj_elf::ET_DYN {
+            firmware_load_address.unwrap_or(0)
+        } else {
+            0
+        };
+        let entry = header
+            .e_entry(endian)
+            .checked_add(entry_bias)
+            .ok_or(ElfError::AddressOverflow)?;
         let entry_is_executable = segments.iter().any(|segment| {
             entry >= segment.address
                 && entry - segment.address < segment.file_data.len() as u64
@@ -123,6 +172,13 @@ impl<'data> ElfImage<'data> {
     /// Returns the architectural entry point.
     pub const fn entry(&self) -> u64 {
         self.entry
+    }
+
+    /// Returns every loadable segment's half-open memory range.
+    pub fn segment_ranges(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        self.segments
+            .iter()
+            .map(|segment| (segment.address, segment.address + segment.memory_size))
     }
 
     /// Loads every validated segment and zeros its BSS tail.
@@ -158,7 +214,7 @@ pub enum ElfError {
     Parse(object::read::Error),
     /// The executable is not 64-bit little-endian.
     UnsupportedFormat,
-    /// The executable is not `ET_EXEC`.
+    /// The image is not a supported executable type.
     UnsupportedType,
     /// The executable is not for RISC-V.
     UnsupportedMachine,
@@ -173,7 +229,12 @@ pub enum ElfError {
     /// A segment exceeds the host address space.
     AddressOverflow,
     /// A segment lies outside the configured DRAM range.
-    OutOfDram,
+    OutOfDram {
+        start: u64,
+        end: u64,
+        dram_start: u64,
+        dram_end: u64,
+    },
     /// No `PT_LOAD` segments were found.
     NoLoadableSegments,
     /// Two loadable segments overlap.
@@ -190,7 +251,9 @@ impl fmt::Display for ElfError {
             Self::NotElf => formatter.write_str("input does not have an ELF header"),
             Self::Parse(error) => write!(formatter, "invalid ELF file: {error}"),
             Self::UnsupportedFormat => formatter.write_str("ELF must be 64-bit and little-endian"),
-            Self::UnsupportedType => formatter.write_str("ELF must be an ET_EXEC executable"),
+            Self::UnsupportedType => {
+                formatter.write_str("ELF must be a static ET_EXEC or firmware PIE")
+            }
             Self::UnsupportedMachine => formatter.write_str("ELF must target RISC-V"),
             Self::DynamicExecutable => {
                 formatter.write_str("dynamically linked ELF executables are not supported")
@@ -205,7 +268,16 @@ impl fmt::Display for ElfError {
                 formatter.write_str("ELF segment data lies outside the image")
             }
             Self::AddressOverflow => formatter.write_str("ELF segment address range overflows"),
-            Self::OutOfDram => formatter.write_str("ELF segment lies outside configured DRAM"),
+            Self::OutOfDram {
+                start,
+                end,
+                dram_start,
+                dram_end,
+            } => write!(
+                formatter,
+                "ELF segment {start:#x}..{end:#x} lies outside DRAM \
+                 {dram_start:#x}..{dram_end:#x}"
+            ),
             Self::NoLoadableSegments => formatter.write_str("ELF has no loadable segments"),
             Self::OverlappingSegments => formatter.write_str("ELF loadable segments overlap"),
             Self::EntryNotExecutable => {

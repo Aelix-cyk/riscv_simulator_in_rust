@@ -2,6 +2,10 @@
 
 aelix's RISC-V Simulator in Rust (aRVSR)
 
+## Goal
+
+The project's final goal is to boot a Linux operating system.
+
 ## Status
 
 A 64-bit hart that executes RV64IMAFDCB with M/S/U privilege plus Zicsr and Zicntr —
@@ -20,6 +24,8 @@ controls. `satp` supports Bare and Sv39 modes with a 16-bit ASID. Sv39 uses
 4 KiB and superpage mappings, software A/D updates, PBMT memory types, and a
 64-entry FIFO TLB. Fine-grained invalidation is provided by Svinval's
 `SINVAL.VMA`, `SFENCE.W.INVAL`, and `SFENCE.INVAL.IR`.
+The hart exposes 16 PMP entries with TOR, NA4, and NAPOT ranges, lock bits,
+and physical read/write/execute enforcement.
 HPM counters select retired instructions, loads, stores, and branches/jumps
 through one-hot event masks. The target profile is RVA22S64, built up
 progressively: see `GLOSSARY.md` for terminology, `docs/impl-choices/` for the
@@ -35,6 +41,9 @@ to enter the architectural trap paths.
 ```sh
 cargo run -- --elf path/to/program.elf [--trace] [--max-steps <N>] \
     [--dram-base <ADDRESS>] [--dram-size <SIZE>]
+
+cargo run -- --firmware path/to/fw_jump.elf --dtb path/to/platform.dtb \
+    --kernel path/to/probe.elf [--trace] [--max-steps <N>]
 ```
 
 `--elf` loads a static 64-bit little-endian RISC-V `ET_EXEC` file. Every
@@ -44,7 +53,15 @@ entry point must lie in a file-backed executable segment. Dynamically linked
 executables are not supported.
 
 Flat binaries remain available through `--binary`; they are loaded at the
-configured DRAM base. The input must use exactly one of `--elf` or `--binary`.
+configured DRAM base. Single-image mode uses exactly one of `--elf` or
+`--binary`.
+
+`--firmware`, `--dtb`, and `--kernel` select the QEMU-virt-compatible OpenSBI
+boot path. It requires the default 128 MiB DRAM layout, relocates static PIE
+firmware to `0x8000_0000`, loads the next stage at `0x8020_0000`, and places the
+device tree at `0x8220_0000`. Firmware boot passes hart ID 0 in `a0` and the
+device-tree address in `a1`. Its default step limit is 10,000,000 rather than
+the single-image default of 10,000.
 
 Programs run until they exit through the platform device, reach the halt
 self-loop `jal x0, 0`, or take `--max-steps` steps (default 10 000). The default
@@ -142,6 +159,18 @@ It is provided through `mise` from the external architecture-test checkout:
 ```
 
 The current `mise` environment provides `uv 0.11.33`.
+
+The OpenSBI boot gate pins upstream v1.9. It builds an unmodified generic
+platform firmware with a PIE-capable LLVM/lld toolchain, compiles the minimal
+device tree with `dtc`, and boots an S-mode probe through SBI:
+
+```sh
+export OPENSBI_DIR="$HOME/tools/opensbi"
+cargo test --test opensbi_boot -- --ignored --nocapture
+```
+
+`LLVM` may select a versioned LLVM suffix or tool directory. `DTC` overrides the
+device-tree compiler, and `RISCV` selects the bare-metal fixture toolchain.
 
 ## Development tooling
 
