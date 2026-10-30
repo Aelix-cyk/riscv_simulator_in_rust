@@ -1744,9 +1744,22 @@ impl<B: Bus> Machine<B> {
         };
         let csrs = *self.cpu.csrs();
         self.mmu
-            .translate_checked(&mut self.bus, config, address, access, |physical_address| {
-                csrs.pmp_allows(physical_address, effective_privilege, true, false, false)
-            })
+            .translate_checked(
+                &mut self.bus,
+                config,
+                address,
+                access,
+                |physical_address, width| {
+                    csrs.pmp_allows(
+                        physical_address,
+                        width,
+                        effective_privilege,
+                        true,
+                        false,
+                        false,
+                    )
+                },
+            )
             .map_err(|fault| {
                 let cause = match (fault.kind, fault.access) {
                     (FaultKind::Page, Access::Fetch) => inst::CAUSE_FETCH_PAGE_FAULT,
@@ -1776,14 +1789,14 @@ impl<B: Bus> Machine<B> {
                 .checked_add(offset as u64)
                 .ok_or_else(|| self.access_exception(access, address))?;
             *slot = self.translate_address(virtual_address, access)?;
-            if !self.pmp_allows(slot.address, access) {
-                return Err(self.access_exception(access, virtual_address));
-            }
+        }
+        if !self.pmp_allows_physical_run(&physical, access) {
+            return Err(self.access_exception(access, address));
         }
         Ok(physical)
     }
 
-    fn pmp_allows(&self, address: u64, access: Access) -> bool {
+    fn pmp_allows(&self, address: u64, width: u64, access: Access) -> bool {
         let current = self.cpu.privilege();
         let privilege = self
             .cpu
@@ -1793,25 +1806,48 @@ impl<B: Bus> Machine<B> {
             Access::Fetch => self
                 .cpu
                 .csrs()
-                .pmp_allows(address, privilege, false, false, true),
+                .pmp_allows(address, width, privilege, false, false, true),
             Access::Load => self
                 .cpu
                 .csrs()
-                .pmp_allows(address, privilege, true, false, false),
+                .pmp_allows(address, width, privilege, true, false, false),
             Access::Store => self
                 .cpu
                 .csrs()
-                .pmp_allows(address, privilege, false, true, false),
+                .pmp_allows(address, width, privilege, false, true, false),
             Access::CacheManagement => {
                 self.cpu
                     .csrs()
-                    .pmp_allows(address, privilege, true, false, false)
+                    .pmp_allows(address, width, privilege, true, false, false)
                     || self
                         .cpu
                         .csrs()
-                        .pmp_allows(address, privilege, false, true, false)
+                        .pmp_allows(address, width, privilege, false, true, false)
             }
         }
+    }
+
+    fn pmp_allows_physical_run(&self, translations: &[Translation], access: Access) -> bool {
+        let Some(first) = translations.first() else {
+            return true;
+        };
+        let mut run_start = first.address;
+        let mut previous = first.address;
+        let mut width = 1;
+        for translation in &translations[1..] {
+            if previous.checked_add(1) == Some(translation.address) {
+                previous = translation.address;
+                width += 1;
+                continue;
+            }
+            if !self.pmp_allows(run_start, width, access) {
+                return false;
+            }
+            run_start = translation.address;
+            previous = translation.address;
+            width = 1;
+        }
+        self.pmp_allows(run_start, width, access)
     }
 
     fn access_exception(&self, access: Access, address: u64) -> Exception {
@@ -1925,10 +1961,10 @@ impl<B: Bus> Machine<B> {
                 .checked_add(offset as u64)
                 .ok_or_else(|| self.access_exception(access, address))?;
             let translation = self.translate_address(virtual_address, access)?;
-            if !self.pmp_allows(translation.address, access) {
-                return Err(self.access_exception(access, virtual_address));
-            }
             translations.push(translation);
+        }
+        if !self.pmp_allows_physical_run(&translations, access) {
+            return Err(self.access_exception(access, address));
         }
         for ((translation, byte), offset) in translations
             .into_iter()
@@ -1950,6 +1986,7 @@ impl<B: Bus> Machine<B> {
         access: Access,
         fault_address: u64,
     ) -> Result<(), Exception> {
+        let mut translations = Vec::new();
         for offset in 0..width {
             let virtual_address = address
                 .checked_add(offset)
@@ -1957,9 +1994,12 @@ impl<B: Bus> Machine<B> {
             let translation = self
                 .translate_address(virtual_address, access)
                 .map_err(|exception| Exception::new(exception.cause, fault_address))?;
-            if !self.pmp_allows(translation.address, access) {
-                return Err(self.access_exception(access, fault_address));
-            }
+            translations.push(translation);
+        }
+        if !self.pmp_allows_physical_run(&translations, access) {
+            return Err(self.access_exception(access, fault_address));
+        }
+        for translation in translations {
             self.bus
                 .check_write(translation.address, 1, translation.memory_type)
                 .map_err(|_| self.access_exception(access, fault_address))?;
@@ -2314,6 +2354,8 @@ mod tests {
     const MSTATUS_MPP_SUPERVISOR: u64 = 1 << 11;
     const MSTATUS_MPRV_BIT: u64 = 1 << 17;
     const PMP_NAPOT_RWX: u64 = 0x1f;
+    const PMP_NA4_READ: u64 = 0x09;
+    const PMP_ADDRESS_SHIFT: u32 = 2;
     const MSTATUS_TVM_BIT: u64 = 1 << 20;
     const MSTATUS_TW_BIT: u64 = 1 << 21;
     const MSTATUS_TSR_BIT: u64 = 1 << 22;
@@ -2402,6 +2444,41 @@ mod tests {
                 .cpu_mut()
                 .write_csr(inst::CSR_PMPCFG0, PMP_NAPOT_RWX)
         );
+    }
+
+    #[test]
+    fn pmp_whole_access_match_rejects_split_entry_bypass() {
+        let mut machine = machine();
+        machine
+            .bus_mut()
+            .write_u64(DRAM_BASE, u64::MAX, MemoryType::Cacheable)
+            .unwrap();
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_PMPADDR0, DRAM_BASE >> PMP_ADDRESS_SHIFT)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_PMPADDR1, (DRAM_BASE + 4) >> PMP_ADDRESS_SHIFT)
+        );
+        assert!(
+            machine
+                .cpu_mut()
+                .write_csr(inst::CSR_PMPCFG0, PMP_NA4_READ | (PMP_NA4_READ << u8::BITS))
+        );
+        assert!(machine.cpu_mut().write_csr(inst::CSR_MTVEC, HANDLER));
+        machine.cpu_mut().write_gpr(5, DRAM_BASE);
+
+        machine.execute(Instruction::Ld {
+            rd: 6,
+            rs1: 5,
+            offset: 0,
+        });
+
+        assert_trap(&machine, inst::CAUSE_LOAD_ACCESS, DRAM_BASE, 0);
+        assert_eq!(machine.cpu().read_gpr(6), 0);
     }
 
     /// A hart whose synchronous traps enter a known handler.

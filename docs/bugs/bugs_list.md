@@ -30,3 +30,6 @@
 | [0026 — Ssu64xl is documented as not implemented despite UXLEN=64](0026-ssu64xl-documented-as-not-implemented.md) | Fixed |
 | [0027 — ELF loader accepts dynamic executables without PT_INTERP](0027-elf-accepts-dynamic-without-interp.md) | Fixed |
 | [0028 — ELF segment preflight is byte-at-a-time](0028-elf-preflight-byte-at-a-time.md) | Fixed |
+| [0029 — PMP checks one byte at a time instead of the whole access](0029-pmp-checks-per-byte-not-whole-access.md) | Fixed |
+| [0030 — M-mode PMP bypass skips the lowest matching entry](0030-pmp-m-mode-bypass-skips-first-match.md) | Fixed |
+| [0031 — locked TOR entry leaves its lower-bound pmpaddr writable](0031-locked-tor-lower-bound-writable.md) | Fixed |

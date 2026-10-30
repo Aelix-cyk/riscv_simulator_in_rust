@@ -373,7 +373,7 @@ impl Csrs {
             inst::CSR_PMPCFG2 => self.write_pmpcfg(1, value),
             inst::CSR_PMPADDR0..=inst::CSR_PMPADDR15 => {
                 let index = usize::from(address - inst::CSR_PMPADDR0);
-                if !self.pmp_entry_locked(index) {
+                if self.pmp_address_writable(index) {
                     self.pmpaddr[index] = value & PMP_ADDRESS_MASK;
                 }
             }
@@ -483,33 +483,54 @@ impl Csrs {
         self.pmp_config(index) & PMP_CFG_LOCK != 0
     }
 
+    fn pmp_address_writable(self, index: usize) -> bool {
+        if self.pmp_entry_locked(index) {
+            return false;
+        }
+        index + 1 >= PMP_ENTRY_COUNT
+            || !self.pmp_entry_locked(index + 1)
+            || self.pmp_config(index + 1) & PMP_CFG_ADDRESS_MASK != PMP_CFG_ADDRESS_TOR
+    }
+
     /// Checks a physical access against the lowest-numbered matching PMP entry.
     pub(crate) fn pmp_allows(
         self,
-        address: u64,
+        start: u64,
+        width: u64,
         privilege: PrivilegeMode,
         read: bool,
         write: bool,
         execute: bool,
     ) -> bool {
+        let Some(end) = start.checked_add(width) else {
+            return false;
+        };
+        let mut selected = None;
         for index in 0..PMP_ENTRY_COUNT {
             let config = self.pmp_config(index);
             if config & PMP_CFG_ADDRESS_MASK == PMP_CFG_ADDRESS_OFF {
                 continue;
             }
-            if privilege == PrivilegeMode::Machine && config & PMP_CFG_LOCK == 0 {
-                continue;
-            }
-            let Some((start, end)) = self.pmp_range(index, config) else {
+            let Some(range) = self.pmp_range(index, config) else {
                 continue;
             };
-            if (start..end).contains(&address) {
-                return (!read || config & PMP_CFG_READ != 0)
-                    && (!write || config & PMP_CFG_WRITE != 0)
-                    && (!execute || config & PMP_CFG_EXECUTE != 0);
+            if range.0 < end && start < range.1 {
+                selected = Some((config, range));
+                break;
             }
         }
-        privilege == PrivilegeMode::Machine
+        let Some((config, range)) = selected else {
+            return privilege == PrivilegeMode::Machine;
+        };
+        if start < range.0 || end > range.1 {
+            return false;
+        }
+        if privilege == PrivilegeMode::Machine && config & PMP_CFG_LOCK == 0 {
+            return true;
+        }
+        (!read || config & PMP_CFG_READ != 0)
+            && (!write || config & PMP_CFG_WRITE != 0)
+            && (!execute || config & PMP_CFG_EXECUTE != 0)
     }
 
     fn pmp_range(self, index: usize, config: u8) -> Option<(u64, u64)> {
@@ -1021,24 +1042,108 @@ mod tests {
             u64::from(PMP_CFG_READ | PMP_CFG_ADDRESS_NA4)
         ));
 
-        assert!(csrs.pmp_allows(base, PrivilegeMode::Supervisor, true, false, false));
-        assert!(!csrs.pmp_allows(base, PrivilegeMode::Supervisor, false, true, false));
+        assert!(csrs.pmp_allows(base, 1, PrivilegeMode::Supervisor, true, false, false));
+        assert!(!csrs.pmp_allows(base, 1, PrivilegeMode::Supervisor, false, true, false));
         assert!(!csrs.pmp_allows(
             base + NA4_BYTES,
+            1,
             PrivilegeMode::Supervisor,
             true,
             false,
             false
         ));
-        assert!(csrs.pmp_allows(base + NA4_BYTES, PrivilegeMode::Machine, true, true, true));
+        assert!(csrs.pmp_allows(
+            base + NA4_BYTES,
+            1,
+            PrivilegeMode::Machine,
+            true,
+            true,
+            true
+        ));
 
         assert!(csrs.write(
             inst::CSR_PMPCFG0,
             u64::from(PMP_CFG_READ | PMP_CFG_ADDRESS_NA4 | PMP_CFG_LOCK)
         ));
-        assert!(!csrs.pmp_allows(base, PrivilegeMode::Machine, false, true, false));
+        assert!(!csrs.pmp_allows(base, 1, PrivilegeMode::Machine, false, true, false));
         assert!(csrs.write(inst::CSR_PMPCFG0, 0));
         assert_ne!(csrs.read(inst::CSR_PMPCFG0), Some(0));
+    }
+
+    #[test]
+    fn pmp_uses_the_first_matching_entry_for_the_whole_access() {
+        let mut csrs = Csrs::default();
+        assert!(csrs.write(inst::CSR_PMPADDR0, 0));
+        assert!(csrs.write(inst::CSR_PMPADDR1, 1));
+        let two_na4_entries = u64::from(PMP_CFG_READ | PMP_CFG_ADDRESS_NA4)
+            | (u64::from(PMP_CFG_READ | PMP_CFG_ADDRESS_NA4) << u8::BITS);
+        assert!(csrs.write(inst::CSR_PMPCFG0, two_na4_entries));
+
+        assert!(csrs.pmp_allows(0, NA4_BYTES, PrivilegeMode::Supervisor, true, false, false));
+        assert!(!csrs.pmp_allows(
+            0,
+            NA4_BYTES * 2,
+            PrivilegeMode::Supervisor,
+            true,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn pmp_m_mode_bypasses_only_after_selecting_the_first_match() {
+        let mut csrs = Csrs::default();
+        assert!(csrs.write(inst::CSR_PMPADDR0, u64::MAX));
+        assert!(csrs.write(inst::CSR_PMPADDR1, u64::MAX));
+        let unlocked = u64::from(PMP_CFG_ADDRESS_NAPOT);
+        let locked = u64::from(PMP_CFG_ADDRESS_NAPOT | PMP_CFG_LOCK) << u8::BITS;
+        assert!(csrs.write(inst::CSR_PMPCFG0, unlocked | locked));
+        assert!(csrs.pmp_allows(0, NA4_BYTES, PrivilegeMode::Machine, true, true, true));
+
+        let locked_first = u64::from(PMP_CFG_ADDRESS_NAPOT | PMP_CFG_LOCK);
+        let permissive_second =
+            u64::from(PMP_CFG_READ | PMP_CFG_WRITE | PMP_CFG_EXECUTE | PMP_CFG_ADDRESS_NAPOT)
+                << u8::BITS;
+        assert!(csrs.write(inst::CSR_PMPCFG0, locked_first | permissive_second));
+        assert!(!csrs.pmp_allows(0, NA4_BYTES, PrivilegeMode::Machine, true, false, false));
+    }
+
+    #[test]
+    fn locked_tor_entry_protects_its_lower_bound_address() {
+        let mut csrs = Csrs::default();
+        assert!(csrs.write(inst::CSR_PMPADDR0, 0x10));
+        assert!(csrs.write(inst::CSR_PMPADDR1, 0x20));
+        let locked_tor = u64::from(PMP_CFG_ADDRESS_TOR | PMP_CFG_LOCK) << u8::BITS;
+        assert!(csrs.write(inst::CSR_PMPCFG0, locked_tor));
+
+        assert!(csrs.write(inst::CSR_PMPADDR0, 0x40));
+        assert_eq!(csrs.read(inst::CSR_PMPADDR0), Some(0x10));
+
+        assert!(csrs.write(inst::CSR_PMPCFG0, 0));
+        assert_eq!(
+            csrs.read(inst::CSR_PMPCFG0),
+            Some(u64::from(PMP_CFG_ADDRESS_TOR | PMP_CFG_LOCK) << u8::BITS)
+        );
+
+        let mut unlocked_tor = Csrs::default();
+        assert!(unlocked_tor.write(inst::CSR_PMPADDR0, 0x10));
+        assert!(unlocked_tor.write(inst::CSR_PMPADDR1, 0x20));
+        assert!(unlocked_tor.write(
+            inst::CSR_PMPCFG0,
+            u64::from(PMP_CFG_ADDRESS_TOR) << u8::BITS
+        ));
+        assert!(unlocked_tor.write(inst::CSR_PMPADDR0, 0x40));
+        assert_eq!(unlocked_tor.read(inst::CSR_PMPADDR0), Some(0x40));
+
+        let mut locked_napot = Csrs::default();
+        assert!(locked_napot.write(inst::CSR_PMPADDR0, 0x10));
+        assert!(locked_napot.write(inst::CSR_PMPADDR1, 0x20));
+        assert!(locked_napot.write(
+            inst::CSR_PMPCFG0,
+            u64::from(PMP_CFG_ADDRESS_NAPOT | PMP_CFG_LOCK) << u8::BITS
+        ));
+        assert!(locked_napot.write(inst::CSR_PMPADDR0, 0x40));
+        assert_eq!(locked_napot.read(inst::CSR_PMPADDR0), Some(0x40));
     }
 
     #[test]

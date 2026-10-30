@@ -144,11 +144,11 @@ impl Mmu {
         virtual_address: u64,
         access: Access,
     ) -> Result<Translation, Fault> {
-        self.translate_checked(bus, config, virtual_address, access, |_| true)
+        self.translate_checked(bus, config, virtual_address, access, |_, _| true)
     }
 
     /// Translates one address while enforcing PMP on implicit page-table reads.
-    pub(crate) fn translate_checked<B: Bus, F: Fn(u64) -> bool>(
+    pub(crate) fn translate_checked<B: Bus, F: Fn(u64, u64) -> bool>(
         &mut self,
         bus: &mut B,
         config: Config,
@@ -244,7 +244,7 @@ impl Mmu {
     }
 }
 
-fn walk<B: Bus, F: Fn(u64) -> bool>(
+fn walk<B: Bus, F: Fn(u64, u64) -> bool>(
     bus: &mut B,
     config: Config,
     virtual_address: u64,
@@ -257,7 +257,7 @@ fn walk<B: Bus, F: Fn(u64) -> bool>(
     for level in (0..SV39_LEVELS).rev() {
         let index = vpn_index(virtual_address, level);
         let address = (table << PAGE_BITS).wrapping_add(index * PTE_BYTES);
-        if !pmp_read_allows(address) {
+        if !pmp_read_allows(address, PTE_BYTES) {
             return Err(fault(access, FaultKind::Access));
         }
         let pte = bus
