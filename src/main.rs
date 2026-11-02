@@ -12,14 +12,12 @@ use riscv_simulator_in_rust::cli::{self, Command, Options, ProgramInput, USAGE};
 use riscv_simulator_in_rust::cpu::{A0, A1, ABI_NAMES, Cpu, FPR_COUNT};
 use riscv_simulator_in_rust::elf::{ElfImage, is_elf};
 use riscv_simulator_in_rust::linux::LinuxImage;
-use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
+use riscv_simulator_in_rust::machine::{Machine, StepOptions};
 use riscv_simulator_in_rust::platform::Platform;
 
 /// Exit code for usage and input errors.
 const EXIT_USAGE: u8 = 2;
 
-/// Exit code for a run that stopped at its step limit.
-const EXIT_STEP_LIMIT: u8 = 2;
 /// Exit code used when a platform reports exit without a status.
 const EXIT_DEVICE_FAILURE: u8 = 1;
 
@@ -188,39 +186,28 @@ fn run(options: &Options) -> ExitCode {
     machine.cpu_mut().set_pc(entry);
 
     let mut steps = 0;
-    let outcome = loop {
-        if steps == options.max_steps {
-            break RunOutcome::StepLimitReached;
-        }
+    loop {
         machine.step(StepOptions {
             trace: options.trace,
         });
         steps += 1;
         if machine.halted() {
-            break RunOutcome::Halted;
+            break;
         }
         if machine.exit_code().is_some() {
-            break RunOutcome::Exited;
+            break;
         }
-    };
+    }
 
     let _ = std::io::stdout().write_all(&machine.bus_mut().take_console_output());
     print_registers(machine.cpu());
     println!("steps = {steps}");
 
-    match outcome {
-        RunOutcome::Halted | RunOutcome::Exited => ExitCode::from(machine.exit_code().unwrap_or(
-            if outcome == RunOutcome::Halted {
-                0
-            } else {
-                EXIT_DEVICE_FAILURE
-            },
-        )),
-        RunOutcome::StepLimitReached => {
-            eprintln!("step limit reached after {steps} steps");
-            ExitCode::from(EXIT_STEP_LIMIT)
-        }
-    }
+    ExitCode::from(machine.exit_code().unwrap_or(if machine.halted() {
+        0
+    } else {
+        EXIT_DEVICE_FAILURE
+    }))
 }
 
 fn read_input(path: &Path) -> Result<Vec<u8>, ()> {

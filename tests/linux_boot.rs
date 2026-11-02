@@ -5,10 +5,8 @@ mod linux;
 #[path = "support/opensbi.rs"]
 mod opensbi;
 
-use std::env;
 use std::process::Command;
 
-const DEFAULT_STEP_LIMIT: u64 = 1_000_000_000;
 const OPENSBI_BANNER: &str = "OpenSBI v1.9";
 const LINUX_BANNER: &str = "Linux version ";
 const INIT_SUCCESS: &str = "ARVSR-LINUX-OK";
@@ -19,10 +17,6 @@ const BOOTARGS: &str = "console=ttyS0 earlycon=sbi";
 fn linux_reaches_an_smode_userspace_init() {
     let opensbi = opensbi::OpenSbiFixture::build();
     let linux = linux::LinuxFixture::build();
-    let step_limit = env::var("LINUX_STEP_LIMIT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_STEP_LIMIT);
 
     let output = Command::new(env!("CARGO_BIN_EXE_riscv_simulator_in_rust"))
         .arg("--firmware")
@@ -35,8 +29,6 @@ fn linux_reaches_an_smode_userspace_init() {
         .arg(&linux.initrd)
         .arg("--bootargs")
         .arg(BOOTARGS)
-        .arg("--max-steps")
-        .arg(step_limit.to_string())
         .output()
         .expect("run simulator CLI");
     assert!(

@@ -19,6 +19,7 @@ pub const DEVICE_TREE_ADDRESS: u64 = DRAM_BASE + 0x220_0000;
 
 /// Upper bound reserved for the device tree after [`DEVICE_TREE_ADDRESS`].
 const DEVICE_TREE_MAX_BYTES: u64 = 0x20_0000;
+const DEVICE_TREE_END_ADDRESS: u64 = DEVICE_TREE_ADDRESS + DEVICE_TREE_MAX_BYTES;
 
 /// Space reserved after the effective Linux Image size for early allocation.
 const KERNEL_GROWTH_GAP_BYTES: u64 = 16 << 20;
@@ -199,10 +200,22 @@ fn linux_layout(
 }
 
 fn linux_initrd_start(kernel_end: u64) -> Result<u64, BootError> {
+    if kernel_end > DEVICE_TREE_ADDRESS {
+        return Err(BootError::BootRegionOverlap {
+            name: "kernel",
+            start: NEXT_STAGE_ADDRESS,
+            end: kernel_end,
+            reserved_start: DEVICE_TREE_ADDRESS,
+            reserved_end: DEVICE_TREE_END_ADDRESS,
+        });
+    }
     let after_kernel_gap = kernel_end
         .checked_add(KERNEL_GROWTH_GAP_BYTES)
         .ok_or(BootError::BootRegionOverflow)?;
-    align_up(after_kernel_gap, DRAM_PAGE_BYTES)
+    align_up(
+        after_kernel_gap.max(DEVICE_TREE_END_ADDRESS),
+        DRAM_PAGE_BYTES,
+    )
 }
 
 fn align_up(value: u64, alignment: u64) -> Result<u64, BootError> {
@@ -242,6 +255,14 @@ pub enum BootError {
         start: u64,
         end: u64,
         dram_end: u64,
+    },
+    /// A boot component overlaps OpenSBI's fixed DTB window.
+    BootRegionOverlap {
+        name: &'static str,
+        start: u64,
+        end: u64,
+        reserved_start: u64,
+        reserved_end: u64,
     },
     /// A computed boot address overflowed.
     BootRegionOverflow,
@@ -288,6 +309,17 @@ impl fmt::Display for BootError {
                 formatter,
                 "{name} range {start:#x}..{end:#x} exceeds DRAM end {dram_end:#x}"
             ),
+            Self::BootRegionOverlap {
+                name,
+                start,
+                end,
+                reserved_start,
+                reserved_end,
+            } => write!(
+                formatter,
+                "{name} range {start:#x}..{end:#x} overlaps reserved firmware range \
+                 {reserved_start:#x}..{reserved_end:#x}"
+            ),
             Self::BootRegionOverflow => {
                 formatter.write_str("a Linux boot address range overflowed")
             }
@@ -329,6 +361,7 @@ mod tests {
         let (initrd_start, initrd_end) = layout.initrd.unwrap();
 
         assert!(initrd_start >= TEST_KERNEL_END + KERNEL_GROWTH_GAP_BYTES);
+        assert!(initrd_start >= DEVICE_TREE_END_ADDRESS);
         assert!(initrd_start.is_multiple_of(DRAM_PAGE_BYTES));
         assert_eq!(initrd_end - initrd_start, TEST_INITRD_BYTES);
         assert!(layout.device_tree_address.is_multiple_of(DRAM_PAGE_BYTES));
@@ -340,12 +373,61 @@ mod tests {
     fn linux_layout_rejects_images_past_dram_end() {
         let error = linux_layout(
             default_layout(),
-            DRAM_BASE + default_layout().size() - 1,
-            NO_BYTES,
+            TEST_KERNEL_END,
+            default_layout().size(),
             TEST_DTB_BYTES,
         )
         .unwrap_err();
 
         assert!(matches!(error, BootError::BootImageOutsideDram { .. }));
+    }
+
+    #[test]
+    fn linux_layout_allows_kernel_ending_at_the_dtb_window() {
+        let layout = linux_layout(
+            default_layout(),
+            DEVICE_TREE_ADDRESS,
+            NO_BYTES,
+            TEST_DTB_BYTES,
+        )
+        .unwrap();
+
+        assert!(layout.device_tree_address >= DEVICE_TREE_END_ADDRESS);
+    }
+
+    #[test]
+    fn linux_layout_rejects_kernel_crossing_the_dtb_window() {
+        let error = linux_layout(
+            default_layout(),
+            DEVICE_TREE_ADDRESS + 1,
+            NO_BYTES,
+            TEST_DTB_BYTES,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            BootError::BootRegionOverlap {
+                name: "kernel",
+                start: NEXT_STAGE_ADDRESS,
+                end,
+                reserved_start: DEVICE_TREE_ADDRESS,
+                reserved_end: DEVICE_TREE_END_ADDRESS,
+            } if end == DEVICE_TREE_ADDRESS + 1
+        ));
+    }
+
+    #[test]
+    fn linux_layout_places_initrd_after_the_dtb_window() {
+        let layout = linux_layout(
+            default_layout(),
+            TEST_KERNEL_END,
+            TEST_INITRD_BYTES,
+            TEST_DTB_BYTES,
+        )
+        .unwrap();
+        let (initrd_start, _) = layout.initrd.unwrap();
+
+        assert_eq!(initrd_start, DEVICE_TREE_END_ADDRESS);
     }
 }

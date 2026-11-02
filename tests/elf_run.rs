@@ -34,8 +34,6 @@ fn cli_requires_the_matching_input_option() {
 
     let elf = Command::new(simulator)
         .args(["--elf", program.elf_path().to_str().unwrap()])
-        .arg("--max-steps")
-        .arg(STEP_LIMIT.to_string())
         .output()
         .expect("run simulator with ELF input");
     assert_success(&elf);

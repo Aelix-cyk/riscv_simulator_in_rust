@@ -33,3 +33,5 @@
 | [0029 — PMP checks one byte at a time instead of the whole access](0029-pmp-checks-per-byte-not-whole-access.md) | Fixed |
 | [0030 — M-mode PMP bypass skips the lowest matching entry](0030-pmp-m-mode-bypass-skips-first-match.md) | Fixed |
 | [0031 — locked TOR entry leaves its lower-bound pmpaddr writable](0031-locked-tor-lower-bound-writable.md) | Fixed |
+| [0032 — default CLI step limit cannot boot the pinned Linux image](0032-linux-default-step-limit-too-low.md) | Fixed |
+| [0033 — Linux layout does not reserve OpenSBI's fixed DTB window](0033-linux-layout-ignores-dtb-reservation.md) | Fixed |

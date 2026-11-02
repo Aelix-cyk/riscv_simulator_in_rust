@@ -40,15 +40,15 @@ through Linux 6.12 to a minimal S-mode userspace `/init` and a clean poweroff.
 ## Usage
 
 ```sh
-cargo run -- --elf path/to/program.elf [--trace] [--max-steps <N>] \
+cargo run -- --elf path/to/program.elf [--trace] \
     [--dram-base <ADDRESS>] [--dram-size <SIZE>]
 
 cargo run -- --firmware path/to/fw_jump.elf --dtb path/to/platform.dtb \
-    --kernel path/to/probe.elf [--trace] [--max-steps <N>]
+    --kernel path/to/probe.elf [--trace]
 
 cargo run -- --firmware path/to/fw_jump.elf --dtb path/to/platform.dtb \
     --kernel path/to/Image --initrd path/to/initramfs.cpio \
-    [--bootargs <STRING>] [--trace] [--max-steps <N>]
+    [--bootargs <STRING>] [--trace]
 ```
 
 `--elf` loads a static 64-bit little-endian RISC-V `ET_EXEC` file. Every
@@ -65,32 +65,34 @@ configured DRAM base. Single-image mode uses exactly one of `--elf` or
 boot path. It requires the default 128 MiB DRAM layout, relocates static PIE
 firmware to `0x8000_0000`, loads the next stage at `0x8020_0000`, and places the
 device tree at `0x8220_0000` for ELF probe images. Firmware boot passes hart ID
-0 in `a0` and the device-tree address in `a1`. Its default step limit is
-10,000,000 rather than the single-image default of 10,000.
+0 in `a0` and the device-tree address in `a1`.
 
 `--kernel` detects either a static ELF probe or a raw RISC-V Linux `Image` from
 its contents. A Linux `Image` must contain the documented 64-byte RISC-V boot
 header and load at `0x8020_0000`. `--initrd` and `--bootargs` are valid only for
 Linux `Image` input. The simulator reserves 16 MiB after the image's declared
 effective size for kernel growth, places the initramfs next with 4 KiB
-alignment, and places the patched DTB after the initramfs. It writes
+alignment, and places the patched DTB after the initramfs. OpenSBI's fixed
+`0x8220_0000..0x8240_0000` DTB window remains reserved: kernels that cross it
+are rejected, and initrds are placed after it. The loader writes
 `linux,initrd-start`, `linux,initrd-end`, and `bootargs` under `/chosen`.
 Without `--bootargs`, Linux uses `console=ttyS0 earlycon=sbi`.
 
-Programs run until they exit through the platform device, reach the halt
-self-loop `jal x0, 0`, or take `--max-steps` steps (default 10 000). The default
-DRAM layout is 128 MiB starting at `0x8000_0000`. `--dram-base` accepts decimal
-or hexadecimal addresses; `--dram-size` accepts bytes or `KiB`, `MiB`, and
-`GiB` suffixes. Both values must be 4 KiB-aligned, and the complete range must
-fit the 57-bit physical address space without overlapping platform MMIO.
+Programs run until they exit through the platform device or reach the halt
+self-loop `jal x0, 0`. Use an external process timeout when running software
+that is not guaranteed to terminate. The default DRAM layout is 128 MiB
+starting at `0x8000_0000`. `--dram-base` accepts decimal or hexadecimal
+addresses; `--dram-size` accepts bytes or `KiB`, `MiB`, and `GiB` suffixes.
+Both values must be 4 KiB-aligned, and the complete range must fit the 57-bit
+physical address space without overlapping platform MMIO.
 
 On termination the simulator flushes UART output, prints the 32 general-purpose
 registers by ABI name, all FPR bit patterns, decoded FCSR fields, and the step
 count. `--trace` prints each decoded instruction first, one per line.
 
-Exit codes: the platform exit status, `0` for a halt self-loop, or `2` for a
-step limit or bad input. Exceptions do not terminate the run; an invalid or
-missing trap handler eventually reaches the step limit.
+Exit codes: the platform exit status, `0` for a halt self-loop, or `2` for bad
+input. Exceptions do not terminate the run; software with an invalid or missing
+trap handler can run indefinitely.
 
 ## Platform memory map
 
@@ -198,12 +200,11 @@ cargo test --release --test linux_boot -- --ignored --nocapture
 ```
 
 `LINUX_DIR` must be a Linux stable checkout containing the pinned tag.
-`LINUX_STEP_LIMIT` overrides the gate's instruction budget, while `LINUX_JOBS`
-controls the kernel build parallelism. The gate requires a complete LLVM
-toolchain and `cpio`. The boot configuration disables Linux perf/PMU support;
-this milestone validates the boot path rather than SBI PMU integration. A
-successful gate sees the OpenSBI banner, Linux version output, the init marker,
-and simulator exit status 0.
+`LINUX_JOBS` controls the kernel build parallelism. The gate requires a complete
+LLVM toolchain and `cpio`. The boot configuration disables Linux perf/PMU
+support; this milestone validates the boot path rather than SBI PMU integration.
+A successful gate sees the OpenSBI banner, Linux version output, the init
+marker, and simulator exit status 0.
 
 ## Development tooling
 

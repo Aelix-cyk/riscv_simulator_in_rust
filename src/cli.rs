@@ -24,12 +24,10 @@ pub enum Command {
 /// Options for a run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
-    /// Flat binary or ELF executable to load.
+    /// Program input to load.
     pub input: ProgramInput,
     /// Print each executed instruction.
     pub trace: bool,
-    /// Steps to take before giving up.
-    pub max_steps: u64,
     /// Configured DRAM address range.
     pub dram: DramLayout,
 }
@@ -70,22 +68,15 @@ impl ProgramInput {
     }
 }
 
-/// Steps a run takes before giving up, unless `--max-steps` says otherwise.
-pub const DEFAULT_MAX_STEPS: u64 = 10_000;
-
-/// Steps a firmware boot takes before giving up.
-pub const OPENSBI_DEFAULT_MAX_STEPS: u64 = 10_000_000;
-
 /// Usage text, printed for `--help` and for bad arguments.
 pub const USAGE: &str = "\
-usage: riscv_simulator_in_rust --binary <FILE> [--trace] [--max-steps <N>]
+usage: riscv_simulator_in_rust --binary <FILE> [--trace]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
-       riscv_simulator_in_rust --elf <FILE> [--trace] [--max-steps <N>]
+       riscv_simulator_in_rust --elf <FILE> [--trace]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
        riscv_simulator_in_rust --firmware <ELF> --dtb <FILE> --kernel <FILE>
        [--initrd <FILE>] [--bootargs <STRING>]
-       [--trace] [--max-steps <N>] [--dram-base <ADDRESS>]
-       [--dram-size <SIZE>]
+       [--trace] [--dram-base <ADDRESS>] [--dram-size <SIZE>]
 
   --binary <FILE>   flat binary to load at the configured DRAM base and run
   --elf <FILE>      static RV64 ELF executable to load and run
@@ -95,7 +86,6 @@ usage: riscv_simulator_in_rust --binary <FILE> [--trace] [--max-steps <N>]
   --initrd <FILE>   initramfs for a Linux Image
   --bootargs <S>    Linux kernel command line (default: console=ttyS0 earlycon=sbi)
   --trace           print each executed instruction
-  --max-steps <N>   stop after N steps (default 10000; OpenSBI boot 10000000)
   --dram-base <ADDRESS>  DRAM base (default 0x80000000)
   --dram-size <SIZE>     DRAM size (default 128MiB)
   --help            print this help
@@ -109,7 +99,6 @@ where
     let mut args = args.into_iter();
     let mut input = None;
     let mut trace = false;
-    let mut max_steps = None;
     let mut dram_base = DramLayout::default().base();
     let mut dram_size = DramLayout::default().size();
     let mut firmware = None;
@@ -147,14 +136,6 @@ where
                 bootargs = Some(args.next().ok_or("--bootargs needs a value")?);
             }
             "--trace" => trace = true,
-            "--max-steps" => {
-                let value = args.next().ok_or("--max-steps needs a number")?;
-                max_steps = Some(
-                    value
-                        .parse()
-                        .map_err(|_| format!("--max-steps: {value:?} is not a number"))?,
-                );
-            }
             "--dram-base" => {
                 let value = args.next().ok_or("--dram-base needs an address")?;
                 dram_base = parse_number("--dram-base", &value)?;
@@ -190,19 +171,9 @@ where
     } else {
         input.ok_or("--binary, --elf, or a complete OpenSBI boot input is required")?
     };
-    let max_steps = max_steps.unwrap_or(if matches!(input, ProgramInput::Boot(_)) {
-        OPENSBI_DEFAULT_MAX_STEPS
-    } else {
-        DEFAULT_MAX_STEPS
-    });
     let dram = DramLayout::new(dram_base, dram_size)
         .map_err(|error| format!("invalid DRAM layout: {error}"))?;
-    Ok(Command::Run(Options {
-        input,
-        trace,
-        max_steps,
-        dram,
-    }))
+    Ok(Command::Run(Options { input, trace, dram }))
 }
 
 fn set_input(input: &mut Option<ProgramInput>, value: ProgramInput) -> Result<(), String> {
@@ -266,7 +237,6 @@ mod tests {
             Command::Run(Options {
                 input: ProgramInput::Flat(PathBuf::from("loop.bin")),
                 trace: false,
-                max_steps: DEFAULT_MAX_STEPS,
                 dram: DramLayout::default(),
             })
         );
@@ -279,7 +249,6 @@ mod tests {
             Command::Run(Options {
                 input: ProgramInput::Elf(PathBuf::from("program.elf")),
                 trace: false,
-                max_steps: DEFAULT_MAX_STEPS,
                 dram: DramLayout::default(),
             })
         );
@@ -311,7 +280,6 @@ mod tests {
                     bootargs: None,
                 }),
                 trace: false,
-                max_steps: OPENSBI_DEFAULT_MAX_STEPS,
                 dram: DramLayout::default(),
             })
         );
@@ -372,13 +340,12 @@ mod tests {
     }
 
     #[test]
-    fn trace_and_step_limit_are_parsed() {
-        let command = parse_args(&["--binary", "loop.bin", "--trace", "--max-steps", "7"]).unwrap();
+    fn trace_is_parsed() {
+        let command = parse_args(&["--binary", "loop.bin", "--trace"]).unwrap();
 
         match command {
             Command::Run(options) => {
                 assert!(options.trace);
-                assert_eq!(options.max_steps, 7);
             }
             Command::Help => panic!("expected a run"),
         }
@@ -450,7 +417,6 @@ mod tests {
     #[test]
     fn option_values_are_required() {
         assert!(parse_args(&["--binary"]).is_err());
-        assert!(parse_args(&["--binary", "loop.bin", "--max-steps"]).is_err());
         assert!(parse_args(&["--binary", "loop.bin", "--dram-base"]).is_err());
         assert!(parse_args(&["--binary", "loop.bin", "--dram-size"]).is_err());
         assert!(parse_args(&["--binary", "loop.bin", "--initrd"]).is_err());
@@ -460,6 +426,10 @@ mod tests {
     #[test]
     fn unknown_arguments_and_bad_numbers_are_rejected() {
         assert!(parse_args(&["--binary", "loop.bin", "--verbose"]).is_err());
-        assert!(parse_args(&["--binary", "loop.bin", "--max-steps", "many"]).is_err());
+    }
+
+    #[test]
+    fn step_limit_option_is_removed() {
+        assert!(parse_args(&["--binary", "loop.bin", "--max-steps", "7"]).is_err());
     }
 }
