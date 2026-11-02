@@ -51,7 +51,7 @@ excluded), **N/A** (the row does not apply).
 | Timer facility | 64-bit CLINT `mtime`/`mtimecmp` drives the machine timer interrupt; Sstc remains optional | Decided |
 | Number of hardware performance counters | Three: `hpmcounter3`–`hpmcounter5`; counters 6–31 are read-only zero | Decided |
 | Hardware performance events | One-hot selector bits for retired instructions, loads, stores, and branches/jumps; faulting attempts do not count | Decided |
-| Base counters | Full 64-bit `mcycle` and `minstret`, with `cycle`, `time`, and `instret` aliases; `time` mirrors `mcycle` | Decided |
+| Base counters | Full 64-bit `mcycle` and `minstret`, with `cycle` and `instret` aliases; read-only `time` advances with platform time independently of writable cycle state | Implemented |
 | Counter access control | `mcounteren` gates S/U reads, and `scounteren` additionally gates U reads; `mcountinhibit` stops base and HPM counting | Decided |
 | `WFI` and `PAUSE` behaviour | `WFI` stalls in M/S mode until any locally enabled interrupt is pending; it is illegal in U mode, and `mstatus.TW` makes S-mode `WFI` illegal. `PAUSE` executes as a no-op | Decided |
 | Behaviour on unimplemented opcodes | Illegal-instruction exception, delivered through `mtvec`, or through `stvec` when delegated via `medeleg` | Decided |

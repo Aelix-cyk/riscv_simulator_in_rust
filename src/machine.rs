@@ -292,6 +292,7 @@ impl<B: Bus> Machine<B> {
                 self.cpu.csrs_mut().record_retirement(events, written_csr);
                 if writes_cycle {
                     self.bus.tick();
+                    self.cpu.csrs_mut().advance_time();
                 } else {
                     self.advance_cycle();
                 }
@@ -4716,6 +4717,7 @@ mod tests {
             machine.cpu().read_csr(inst::CSR_MCYCLE),
             Some(CYCLE_RELOAD_VALUE)
         );
+        assert_eq!(machine.cpu().read_csr(inst::CSR_TIME), Some(1));
 
         machine.execute(Instruction::Ecall);
         assert_eq!(
@@ -4723,6 +4725,7 @@ mod tests {
             Some(CYCLE_RELOAD_VALUE + 1)
         );
         assert_eq!(machine.cpu().read_csr(inst::CSR_MINSTRET), Some(1));
+        assert_eq!(machine.cpu().read_csr(inst::CSR_TIME), Some(2));
     }
 
     #[test]

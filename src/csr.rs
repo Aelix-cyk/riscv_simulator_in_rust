@@ -224,6 +224,7 @@ pub(crate) struct Csrs {
     satp: u64,
     mhpmcounters: [u64; HPM_COUNTER_COUNT],
     mhpmevents: [u64; HPM_COUNTER_COUNT],
+    time: u64,
     mcycle: u64,
     minstret: u64,
     fcsr: u64,
@@ -281,7 +282,8 @@ impl Csrs {
             | inst::CSR_TDATA1
             | inst::CSR_TDATA2
             | inst::CSR_TDATA3 => Some(0),
-            inst::CSR_CYCLE | inst::CSR_TIME => Some(self.mcycle),
+            inst::CSR_CYCLE => Some(self.mcycle),
+            inst::CSR_TIME => Some(self.time),
             inst::CSR_INSTRET => Some(self.minstret),
             inst::CSR_MCYCLE => Some(self.mcycle),
             inst::CSR_MINSTRET => Some(self.minstret),
@@ -776,9 +778,15 @@ impl Csrs {
 
     /// Advances the cycle counter unless software inhibits it.
     pub(crate) fn advance_cycle(&mut self) {
+        self.advance_time();
         if self.mcountinhibit & MCOUNTINHIBIT_CY_BIT == 0 {
             self.mcycle = self.mcycle.wrapping_add(1);
         }
+    }
+
+    /// Advances the monotonic real-time counter.
+    pub(crate) fn advance_time(&mut self) {
+        self.time = self.time.wrapping_add(1);
     }
 
     /// Retires one instruction in the instruction counter.
@@ -1492,6 +1500,24 @@ mod tests {
 
         assert_eq!(csrs.read(inst::CSR_MCYCLE), Some(0));
         assert_eq!(csrs.read(inst::CSR_MINSTRET), Some(0));
+        assert_eq!(csrs.read(inst::CSR_TIME), Some(1));
+    }
+
+    #[test]
+    fn time_is_independent_of_writable_cycle_state() {
+        let mut csrs = Csrs::default();
+        csrs.advance_cycle();
+        csrs.advance_cycle();
+
+        assert!(csrs.write(inst::CSR_MCYCLE, 0));
+
+        assert_eq!(csrs.read(inst::CSR_MCYCLE), Some(0));
+        assert_eq!(csrs.read(inst::CSR_TIME), Some(2));
+
+        csrs.advance_cycle();
+
+        assert_eq!(csrs.read(inst::CSR_MCYCLE), Some(1));
+        assert_eq!(csrs.read(inst::CSR_TIME), Some(3));
     }
 
     #[test]

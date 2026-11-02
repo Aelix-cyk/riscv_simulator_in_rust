@@ -200,11 +200,12 @@ cargo test --release --test linux_boot -- --ignored --nocapture
 ```
 
 `LINUX_DIR` must be a Linux stable checkout containing the pinned tag.
-`LINUX_JOBS` controls the kernel build parallelism. The gate requires a complete
-LLVM toolchain and `cpio`. The boot configuration disables Linux perf/PMU
-support; this milestone validates the boot path rather than SBI PMU integration.
-A successful gate sees the OpenSBI banner, Linux version output, the init
-marker, and simulator exit status 0.
+`LINUX_JOBS` controls the kernel build parallelism, and
+`LINUX_BOOT_TIMEOUT_SECONDS` overrides the simulator subprocess timeout. The
+gate requires a complete LLVM toolchain and `cpio`. It enables Linux perf and
+SBI PMU support and verifies that Linux PMU initialization completes. A
+successful gate sees the OpenSBI banner, Linux version and PMU initialization
+output, the init marker, and simulator exit status 0.
 
 ## Development tooling
 

@@ -35,3 +35,4 @@
 | [0031 — locked TOR entry leaves its lower-bound pmpaddr writable](0031-locked-tor-lower-bound-writable.md) | Fixed |
 | [0032 — default CLI step limit cannot boot the pinned Linux image](0032-linux-default-step-limit-too-low.md) | Fixed |
 | [0033 — Linux layout does not reserve OpenSBI's fixed DTB window](0033-linux-layout-ignores-dtb-reservation.md) | Fixed |
+| [0034 — time CSR mirrors writable cycle state](0034-time-csr-mirrors-writable-cycle.md) | Fixed |
