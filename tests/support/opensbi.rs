@@ -1,5 +1,8 @@
 //! Builds the pinned OpenSBI firmware and boot fixtures for integration tests.
 
+// Shared by the OpenSBI probe and Linux boot gates.
+#![allow(dead_code)]
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

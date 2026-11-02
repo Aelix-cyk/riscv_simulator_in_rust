@@ -34,7 +34,8 @@ requirements and the choices the specification leaves open.
 The CLI runs on a small platform bus with a CLINT timer, NS16550-compatible
 UART, PLIC, and an explicit exit device. Machine and supervisor interrupt state
 is connected to device interrupt lines, allowing timer and external interrupts
-to enter the architectural trap paths.
+to enter the architectural trap paths. The OpenSBI boot path has been verified
+through Linux 6.12 to a minimal S-mode userspace `/init` and a clean poweroff.
 
 ## Usage
 
@@ -44,6 +45,10 @@ cargo run -- --elf path/to/program.elf [--trace] [--max-steps <N>] \
 
 cargo run -- --firmware path/to/fw_jump.elf --dtb path/to/platform.dtb \
     --kernel path/to/probe.elf [--trace] [--max-steps <N>]
+
+cargo run -- --firmware path/to/fw_jump.elf --dtb path/to/platform.dtb \
+    --kernel path/to/Image --initrd path/to/initramfs.cpio \
+    [--bootargs <STRING>] [--trace] [--max-steps <N>]
 ```
 
 `--elf` loads a static 64-bit little-endian RISC-V `ET_EXEC` file. Every
@@ -59,9 +64,18 @@ configured DRAM base. Single-image mode uses exactly one of `--elf` or
 `--firmware`, `--dtb`, and `--kernel` select the QEMU-virt-compatible OpenSBI
 boot path. It requires the default 128 MiB DRAM layout, relocates static PIE
 firmware to `0x8000_0000`, loads the next stage at `0x8020_0000`, and places the
-device tree at `0x8220_0000`. Firmware boot passes hart ID 0 in `a0` and the
-device-tree address in `a1`. Its default step limit is 10,000,000 rather than
-the single-image default of 10,000.
+device tree at `0x8220_0000` for ELF probe images. Firmware boot passes hart ID
+0 in `a0` and the device-tree address in `a1`. Its default step limit is
+10,000,000 rather than the single-image default of 10,000.
+
+`--kernel` detects either a static ELF probe or a raw RISC-V Linux `Image` from
+its contents. A Linux `Image` must contain the documented 64-byte RISC-V boot
+header and load at `0x8020_0000`. `--initrd` and `--bootargs` are valid only for
+Linux `Image` input. The simulator reserves 16 MiB after the image's declared
+effective size for kernel growth, places the initramfs next with 4 KiB
+alignment, and places the patched DTB after the initramfs. It writes
+`linux,initrd-start`, `linux,initrd-end`, and `bootargs` under `/chosen`.
+Without `--bootargs`, Linux uses `console=ttyS0 earlycon=sbi`.
 
 Programs run until they exit through the platform device, reach the halt
 self-loop `jal x0, 0`, or take `--max-steps` steps (default 10 000). The default
@@ -171,6 +185,25 @@ cargo test --test opensbi_boot -- --ignored --nocapture
 
 `LLVM` may select a versioned LLVM suffix or tool directory. `DTC` overrides the
 device-tree compiler, and `RISCV` selects the bare-metal fixture toolchain.
+
+The Linux boot gate pins Linux v6.12.99 at commit
+`720e8bcaa674dfa40b989207d6cdb44b3aaa8db6`. It builds a configured `Image`,
+builds a static initramfs whose `/init` prints `ARVSR-LINUX-OK` and powers off,
+then boots both through OpenSBI:
+
+```sh
+export LINUX_DIR="$HOME/tools/linux"
+export OPENSBI_DIR="$HOME/tools/opensbi"
+cargo test --release --test linux_boot -- --ignored --nocapture
+```
+
+`LINUX_DIR` must be a Linux stable checkout containing the pinned tag.
+`LINUX_STEP_LIMIT` overrides the gate's instruction budget, while `LINUX_JOBS`
+controls the kernel build parallelism. The gate requires a complete LLVM
+toolchain and `cpio`. The boot configuration disables Linux perf/PMU support;
+this milestone validates the boot path rather than SBI PMU integration. A
+successful gate sees the OpenSBI banner, Linux version output, the init marker,
+and simulator exit status 0.
 
 ## Development tooling
 

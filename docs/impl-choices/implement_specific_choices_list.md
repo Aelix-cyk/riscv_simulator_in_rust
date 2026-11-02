@@ -113,7 +113,8 @@ The spec leaves `ecall` and the surrounding ABI to the execution environment:
 
 | Choice | Ours | Status |
 |---|---|---|
-| Program container | Static ELF64 `ET_EXEC` via `--elf`, or a flat binary via `--binary` | Decided |
+| Program container | Static ELF64 `ET_EXEC` via `--elf`, a flat binary via `--binary`, or a raw RV64 Linux `Image` through the OpenSBI boot path | Decided |
+| Linux boot handoff | Detect ELF probe or raw `Image` from contents; place `Image` at `0x8020_0000`; optionally load an initramfs; patch `/chosen` with initrd bounds and `bootargs`; place the DTB after aligned boot components | Implemented |
 | ELF loading | RV64 little-endian only; matching `p_paddr`/`p_vaddr`; preflight segment bounds and overlap; file-backed executable entry; zero BSS tails; reject `PT_INTERP`, PIE, and dynamic executables | Decided |
 | Program start | ELF `e_entry`; flat images start at the configured DRAM base | Decided |
 | Address translation | Fetch and memory accesses use one central Bare/Sv39 path with per-byte translation for cross-page accesses | Decided |

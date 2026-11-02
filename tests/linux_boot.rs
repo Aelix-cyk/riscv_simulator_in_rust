@@ -1,0 +1,53 @@
+//! End-to-end OpenSBI-to-Linux boot gate.
+
+#[path = "support/linux.rs"]
+mod linux;
+#[path = "support/opensbi.rs"]
+mod opensbi;
+
+use std::env;
+use std::process::Command;
+
+const DEFAULT_STEP_LIMIT: u64 = 1_000_000_000;
+const OPENSBI_BANNER: &str = "OpenSBI v1.9";
+const LINUX_BANNER: &str = "Linux version ";
+const INIT_SUCCESS: &str = "ARVSR-LINUX-OK";
+const BOOTARGS: &str = "console=ttyS0 earlycon=sbi";
+
+#[test]
+#[ignore = "requires LINUX_DIR/OPENSBI_DIR, RISCV/DTC, LLVM, cpio, and builds Linux v6.12.99"]
+fn linux_reaches_an_smode_userspace_init() {
+    let opensbi = opensbi::OpenSbiFixture::build();
+    let linux = linux::LinuxFixture::build();
+    let step_limit = env::var("LINUX_STEP_LIMIT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_STEP_LIMIT);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_riscv_simulator_in_rust"))
+        .arg("--firmware")
+        .arg(&opensbi.firmware)
+        .arg("--dtb")
+        .arg(&opensbi.device_tree)
+        .arg("--kernel")
+        .arg(&linux.kernel)
+        .arg("--initrd")
+        .arg(&linux.initrd)
+        .arg("--bootargs")
+        .arg(BOOTARGS)
+        .arg("--max-steps")
+        .arg(step_limit.to_string())
+        .output()
+        .expect("run simulator CLI");
+    assert!(
+        output.status.success(),
+        "Linux boot failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(OPENSBI_BANNER), "{stdout}");
+    assert!(stdout.contains(LINUX_BANNER), "{stdout}");
+    assert!(stdout.contains(INIT_SUCCESS), "{stdout}");
+}

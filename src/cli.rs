@@ -52,8 +52,12 @@ pub struct BootInput {
     pub firmware: PathBuf,
     /// Flattened device-tree blob for the QEMU-virt-compatible platform.
     pub device_tree: PathBuf,
-    /// Static ELF64 image entered by the firmware.
+    /// Static ELF64 probe or raw Linux Image entered by the firmware.
     pub kernel: PathBuf,
+    /// Optional initramfs used only with a raw Linux Image.
+    pub initrd: Option<PathBuf>,
+    /// Optional Linux command line; a platform default is used when omitted.
+    pub bootargs: Option<String>,
 }
 
 impl ProgramInput {
@@ -78,7 +82,8 @@ usage: riscv_simulator_in_rust --binary <FILE> [--trace] [--max-steps <N>]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
        riscv_simulator_in_rust --elf <FILE> [--trace] [--max-steps <N>]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
-       riscv_simulator_in_rust --firmware <ELF> --dtb <FILE> --kernel <ELF>
+       riscv_simulator_in_rust --firmware <ELF> --dtb <FILE> --kernel <FILE>
+       [--initrd <FILE>] [--bootargs <STRING>]
        [--trace] [--max-steps <N>] [--dram-base <ADDRESS>]
        [--dram-size <SIZE>]
 
@@ -86,7 +91,9 @@ usage: riscv_simulator_in_rust --binary <FILE> [--trace] [--max-steps <N>]
   --elf <FILE>      static RV64 ELF executable to load and run
   --firmware <ELF>  OpenSBI static RV64 ELF firmware to boot
   --dtb <FILE>      flattened device tree passed to OpenSBI
-  --kernel <ELF>    static RV64 ELF image entered by OpenSBI
+  --kernel <FILE>   static RV64 ELF probe or raw Linux Image entered by OpenSBI
+  --initrd <FILE>   initramfs for a Linux Image
+  --bootargs <S>    Linux kernel command line (default: console=ttyS0 earlycon=sbi)
   --trace           print each executed instruction
   --max-steps <N>   stop after N steps (default 10000; OpenSBI boot 10000000)
   --dram-base <ADDRESS>  DRAM base (default 0x80000000)
@@ -108,6 +115,8 @@ where
     let mut firmware = None;
     let mut device_tree = None;
     let mut kernel = None;
+    let mut initrd = None;
+    let mut bootargs = None;
 
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -127,6 +136,15 @@ where
             }
             "--kernel" => {
                 set_option_path(&mut kernel, "--kernel", args.next())?;
+            }
+            "--initrd" => {
+                set_option_path(&mut initrd, "--initrd", args.next())?;
+            }
+            "--bootargs" => {
+                if bootargs.is_some() {
+                    return Err("--bootargs may only be supplied once".to_owned());
+                }
+                bootargs = Some(args.next().ok_or("--bootargs needs a value")?);
             }
             "--trace" => trace = true,
             "--max-steps" => {
@@ -150,10 +168,15 @@ where
         }
     }
 
-    let has_boot_input = firmware.is_some() || device_tree.is_some() || kernel.is_some();
+    let has_boot_input = firmware.is_some()
+        || device_tree.is_some()
+        || kernel.is_some()
+        || initrd.is_some()
+        || bootargs.is_some();
     if input.is_some() && has_boot_input {
         return Err(
-            "--firmware/--dtb/--kernel cannot be combined with --binary or --elf".to_owned(),
+            "--firmware/--dtb/--kernel/--initrd/--bootargs cannot be combined with --binary or --elf"
+                .to_owned(),
         );
     }
     let input = if has_boot_input {
@@ -161,6 +184,8 @@ where
             firmware: firmware.ok_or("--firmware needs a file")?,
             device_tree: device_tree.ok_or("--dtb needs a file")?,
             kernel: kernel.ok_or("--kernel needs a file")?,
+            initrd,
+            bootargs,
         })
     } else {
         input.ok_or("--binary, --elf, or a complete OpenSBI boot input is required")?
@@ -282,6 +307,8 @@ mod tests {
                     firmware: PathBuf::from("fw_jump.elf"),
                     device_tree: PathBuf::from("virt.dtb"),
                     kernel: PathBuf::from("probe.elf"),
+                    initrd: None,
+                    bootargs: None,
                 }),
                 trace: false,
                 max_steps: OPENSBI_DEFAULT_MAX_STEPS,
@@ -316,6 +343,32 @@ mod tests {
         ] {
             assert!(parse_args(&arguments).is_err(), "{arguments:?}");
         }
+    }
+
+    #[test]
+    fn linux_boot_options_are_optional_and_parsed() {
+        let command = parse_args(&[
+            "--firmware",
+            "fw_jump.elf",
+            "--dtb",
+            "virt.dtb",
+            "--kernel",
+            "Image",
+            "--initrd",
+            "initramfs.cpio",
+            "--bootargs",
+            "console=ttyS0",
+        ])
+        .unwrap();
+
+        let Command::Run(options) = command else {
+            panic!("expected a run");
+        };
+        let ProgramInput::Boot(boot) = options.input else {
+            panic!("expected firmware boot");
+        };
+        assert_eq!(boot.initrd, Some(PathBuf::from("initramfs.cpio")));
+        assert_eq!(boot.bootargs.as_deref(), Some("console=ttyS0"));
     }
 
     #[test]
@@ -400,6 +453,8 @@ mod tests {
         assert!(parse_args(&["--binary", "loop.bin", "--max-steps"]).is_err());
         assert!(parse_args(&["--binary", "loop.bin", "--dram-base"]).is_err());
         assert!(parse_args(&["--binary", "loop.bin", "--dram-size"]).is_err());
+        assert!(parse_args(&["--binary", "loop.bin", "--initrd"]).is_err());
+        assert!(parse_args(&["--binary", "loop.bin", "--bootargs"]).is_err());
     }
 
     #[test]

@@ -11,6 +11,7 @@ use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::cli::{self, Command, Options, ProgramInput, USAGE};
 use riscv_simulator_in_rust::cpu::{A0, A1, ABI_NAMES, Cpu, FPR_COUNT};
 use riscv_simulator_in_rust::elf::{ElfImage, is_elf};
+use riscv_simulator_in_rust::linux::LinuxImage;
 use riscv_simulator_in_rust::machine::{Machine, RunOutcome, StepOptions};
 use riscv_simulator_in_rust::platform::Platform;
 
@@ -27,6 +28,16 @@ const FFLAGS_BITS: u32 = 5;
 const FFLAGS_MASK: u64 = (1 << FFLAGS_BITS) - 1;
 const FRM_SHIFT: u32 = FFLAGS_BITS;
 const FRM_MASK: u64 = 0b111;
+const MSTATUS_CSR: u16 = 0x300;
+const MIP_CSR: u16 = 0x344;
+const SSTATUS_CSR: u16 = 0x100;
+const SIP_CSR: u16 = 0x144;
+const MACHINE_TRAP_VECTOR_CSR: u16 = 0x305;
+const SUPERVISOR_TRAP_VECTOR_CSR: u16 = 0x105;
+const MACHINE_EXCEPTION_PC_CSR: u16 = 0x341;
+const MACHINE_CAUSE_CSR: u16 = 0x342;
+const SUPERVISOR_EXCEPTION_PC_CSR: u16 = 0x141;
+const SUPERVISOR_CAUSE_CSR: u16 = 0x142;
 
 fn main() -> ExitCode {
     let options = match cli::parse(std::env::args().skip(1)) {
@@ -106,6 +117,13 @@ fn run(options: &Options) -> ExitCode {
                 Ok(binary) => binary,
                 Err(()) => return ExitCode::from(EXIT_USAGE),
             };
+            let kernel_is_elf = is_elf(&kernel);
+            if kernel_is_elf && (boot_input.initrd.is_some() || boot_input.bootargs.is_some()) {
+                eprintln!(
+                    "--initrd and --bootargs are only supported with a raw Linux Image kernel"
+                );
+                return ExitCode::from(EXIT_USAGE);
+            }
             let firmware =
                 match ElfImage::parse_firmware(&firmware, options.dram, options.dram.base()) {
                     Ok(image) => image,
@@ -114,20 +132,48 @@ fn run(options: &Options) -> ExitCode {
                         return ExitCode::from(EXIT_USAGE);
                     }
                 };
-            let kernel = match ElfImage::parse(&kernel, options.dram) {
-                Ok(image) => image,
-                Err(error) => {
-                    eprintln!("cannot load {}: {error}", boot_input.kernel.display());
-                    return ExitCode::from(EXIT_USAGE);
-                }
+            let load_result = if kernel_is_elf {
+                let kernel = match ElfImage::parse(&kernel, options.dram) {
+                    Ok(image) => image,
+                    Err(error) => {
+                        eprintln!("cannot load {}: {error}", boot_input.kernel.display());
+                        return ExitCode::from(EXIT_USAGE);
+                    }
+                };
+                boot::load(
+                    options.dram,
+                    &firmware,
+                    &device_tree,
+                    &kernel,
+                    machine.bus_mut(),
+                )
+            } else {
+                let kernel =
+                    match LinuxImage::parse(&kernel, options.dram, boot::NEXT_STAGE_ADDRESS) {
+                        Ok(image) => image,
+                        Err(error) => {
+                            eprintln!("cannot load {}: {error}", boot_input.kernel.display());
+                            return ExitCode::from(EXIT_USAGE);
+                        }
+                    };
+                let initrd = match &boot_input.initrd {
+                    Some(path) => match read_input(path) {
+                        Ok(initrd) => Some(initrd),
+                        Err(()) => return ExitCode::from(EXIT_USAGE),
+                    },
+                    None => None,
+                };
+                boot::load_linux(
+                    options.dram,
+                    &firmware,
+                    &device_tree,
+                    &kernel,
+                    initrd.as_deref(),
+                    boot_input.bootargs.as_deref(),
+                    machine.bus_mut(),
+                )
             };
-            let info = match boot::load(
-                options.dram,
-                &firmware,
-                &device_tree,
-                &kernel,
-                machine.bus_mut(),
-            ) {
+            let info = match load_result {
                 Ok(info) => info,
                 Err(error) => {
                     eprintln!("cannot boot firmware: {error}");
@@ -185,6 +231,18 @@ fn read_input(path: &Path) -> Result<Vec<u8>, ()> {
 
 /// Prints the general-purpose registers by ABI name.
 fn print_registers(cpu: &Cpu) {
+    println!("pc = {:#018x}", cpu.pc());
+    println!("privilege = {:?}", cpu.privilege());
+    print_csr(cpu, "mstatus", MSTATUS_CSR);
+    print_csr(cpu, "mip", MIP_CSR);
+    print_csr(cpu, "mtvec", MACHINE_TRAP_VECTOR_CSR);
+    print_csr(cpu, "mepc", MACHINE_EXCEPTION_PC_CSR);
+    print_csr(cpu, "mcause", MACHINE_CAUSE_CSR);
+    print_csr(cpu, "sstatus", SSTATUS_CSR);
+    print_csr(cpu, "sip", SIP_CSR);
+    print_csr(cpu, "stvec", SUPERVISOR_TRAP_VECTOR_CSR);
+    print_csr(cpu, "sepc", SUPERVISOR_EXCEPTION_PC_CSR);
+    print_csr(cpu, "scause", SUPERVISOR_CAUSE_CSR);
     for (index, name) in ABI_NAMES.iter().enumerate() {
         println!("{name} = {:#018x}", cpu.read_gpr(index));
     }
@@ -197,4 +255,10 @@ fn print_registers(cpu: &Cpu) {
         fcsr & FFLAGS_MASK,
         (fcsr >> FRM_SHIFT) & FRM_MASK
     );
+}
+
+fn print_csr(cpu: &Cpu, name: &str, address: u16) {
+    if let Some(value) = cpu.read_csr(address) {
+        println!("{name} = {value:#018x}");
+    }
 }

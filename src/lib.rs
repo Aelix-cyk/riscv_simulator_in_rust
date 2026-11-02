@@ -11,6 +11,7 @@ pub(crate) mod fp;
 pub(crate) mod fp16;
 pub(crate) mod fp64;
 pub(crate) mod inst;
+pub mod linux;
 pub mod machine;
 pub mod memory;
 pub(crate) mod mmu;
