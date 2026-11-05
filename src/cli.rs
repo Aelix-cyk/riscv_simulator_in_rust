@@ -28,6 +28,8 @@ pub struct Options {
     pub input: ProgramInput,
     /// Print each executed instruction.
     pub trace: bool,
+    /// Connect the host terminal to the guest UART.
+    pub interactive: bool,
     /// Configured DRAM address range.
     pub dram: DramLayout,
 }
@@ -76,7 +78,8 @@ usage: riscv_simulator_in_rust --binary <FILE> [--trace]
        [--dram-base <ADDRESS>] [--dram-size <SIZE>]
        riscv_simulator_in_rust --firmware <ELF> --dtb <FILE> --kernel <FILE>
        [--initrd <FILE>] [--bootargs <STRING>]
-       [--trace] [--dram-base <ADDRESS>] [--dram-size <SIZE>]
+       [--interactive] [--trace]
+       [--dram-base <ADDRESS>] [--dram-size <SIZE>]
 
   --binary <FILE>   flat binary to load at the configured DRAM base and run
   --elf <FILE>      static RV64 ELF executable to load and run
@@ -85,6 +88,7 @@ usage: riscv_simulator_in_rust --binary <FILE> [--trace]
   --kernel <FILE>   static RV64 ELF probe or raw Linux Image entered by OpenSBI
   --initrd <FILE>   initramfs for a Linux Image
   --bootargs <S>    Linux kernel command line (default: console=ttyS0 earlycon=sbi)
+  --interactive     connect stdin/stdout to the Linux UART console
   --trace           print each executed instruction
   --dram-base <ADDRESS>  DRAM base (default 0x80000000)
   --dram-size <SIZE>     DRAM size (default 128MiB)
@@ -99,6 +103,7 @@ where
     let mut args = args.into_iter();
     let mut input = None;
     let mut trace = false;
+    let mut interactive = false;
     let mut dram_base = DramLayout::default().base();
     let mut dram_size = DramLayout::default().size();
     let mut firmware = None;
@@ -136,6 +141,7 @@ where
                 bootargs = Some(args.next().ok_or("--bootargs needs a value")?);
             }
             "--trace" => trace = true,
+            "--interactive" => interactive = true,
             "--dram-base" => {
                 let value = args.next().ok_or("--dram-base needs an address")?;
                 dram_base = parse_number("--dram-base", &value)?;
@@ -173,7 +179,18 @@ where
     };
     let dram = DramLayout::new(dram_base, dram_size)
         .map_err(|error| format!("invalid DRAM layout: {error}"))?;
-    Ok(Command::Run(Options { input, trace, dram }))
+    if interactive && trace {
+        return Err("--interactive and --trace cannot be combined".to_owned());
+    }
+    if interactive && !matches!(input, ProgramInput::Boot(_)) {
+        return Err("--interactive requires --firmware, --dtb, and --kernel".to_owned());
+    }
+    Ok(Command::Run(Options {
+        input,
+        trace,
+        interactive,
+        dram,
+    }))
 }
 
 fn set_input(input: &mut Option<ProgramInput>, value: ProgramInput) -> Result<(), String> {
@@ -237,6 +254,7 @@ mod tests {
             Command::Run(Options {
                 input: ProgramInput::Flat(PathBuf::from("loop.bin")),
                 trace: false,
+                interactive: false,
                 dram: DramLayout::default(),
             })
         );
@@ -249,6 +267,7 @@ mod tests {
             Command::Run(Options {
                 input: ProgramInput::Elf(PathBuf::from("program.elf")),
                 trace: false,
+                interactive: false,
                 dram: DramLayout::default(),
             })
         );
@@ -280,6 +299,7 @@ mod tests {
                     bootargs: None,
                 }),
                 trace: false,
+                interactive: false,
                 dram: DramLayout::default(),
             })
         );
@@ -349,6 +369,44 @@ mod tests {
             }
             Command::Help => panic!("expected a run"),
         }
+    }
+
+    #[test]
+    fn interactive_is_parsed_for_firmware_boot() {
+        let command = parse_args(&[
+            "--firmware",
+            "fw_jump.elf",
+            "--dtb",
+            "virt.dtb",
+            "--kernel",
+            "Image",
+            "--interactive",
+        ])
+        .unwrap();
+        let Command::Run(options) = command else {
+            panic!("expected a run");
+        };
+
+        assert!(options.interactive);
+        assert!(!options.trace);
+    }
+
+    #[test]
+    fn interactive_rejects_non_boot_runs_and_tracing() {
+        assert!(parse_args(&["--binary", "loop.bin", "--interactive"]).is_err());
+        assert!(
+            parse_args(&[
+                "--firmware",
+                "fw_jump.elf",
+                "--dtb",
+                "virt.dtb",
+                "--kernel",
+                "Image",
+                "--interactive",
+                "--trace",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

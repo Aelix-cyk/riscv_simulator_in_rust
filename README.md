@@ -36,6 +36,8 @@ UART, PLIC, and an explicit exit device. Machine and supervisor interrupt state
 is connected to device interrupt lines, allowing timer and external interrupts
 to enter the architectural trap paths. The OpenSBI boot path has been verified
 through Linux 6.12 to a minimal S-mode userspace `/init` and a clean poweroff.
+An ignored end-to-end gate also drives both a custom interactive PID 1 and a
+BusyBox 1.37.0 shell over the emulated UART.
 
 ## Usage
 
@@ -48,7 +50,7 @@ cargo run -- --firmware path/to/fw_jump.elf --dtb path/to/platform.dtb \
 
 cargo run -- --firmware path/to/fw_jump.elf --dtb path/to/platform.dtb \
     --kernel path/to/Image --initrd path/to/initramfs.cpio \
-    [--bootargs <STRING>] [--trace]
+    [--bootargs <STRING>] [--interactive] [--trace]
 ```
 
 `--elf` loads a static 64-bit little-endian RISC-V `ET_EXEC` file. Every
@@ -77,6 +79,14 @@ alignment, and places the patched DTB after the initramfs. OpenSBI's fixed
 are rejected, and initrds are placed after it. The loader writes
 `linux,initrd-start`, `linux,initrd-end`, and `bootargs` under `/chosen`.
 Without `--bootargs`, Linux uses `console=ttyS0 earlycon=sbi`.
+
+`--interactive` connects the host's stdin and stdout to the emulated UART for
+the OpenSBI/Linux boot path. On a Linux terminal, stdin enters raw mode so
+control bytes such as `Ctrl-C` reach the guest. Use `Ctrl-A` followed by `x` to
+leave the guest console; `Ctrl-A Ctrl-A` sends one literal `Ctrl-A`. Interactive
+mode also accepts piped stdin for automation. It streams guest output as it is
+produced, suppresses the final register/CSR dump, and cannot be combined with
+`--trace`. Enter commands after the guest console prompt appears.
 
 Programs run until they exit through the platform device or reach the halt
 self-loop `jal x0, 0`. Use an external process timeout when running software
@@ -206,6 +216,36 @@ gate requires a complete LLVM toolchain and `cpio`. It enables Linux perf and
 SBI PMU support and verifies that Linux PMU initialization completes. A
 successful gate sees the OpenSBI banner, Linux version and PMU initialization
 output, the init marker, and simulator exit status 0.
+
+The interactive UART gate additionally pins BusyBox 1.37.0:
+
+```sh
+export BUSYBOX_DIR="$HOME/tools/busybox"
+export BUSYBOX_CROSS_COMPILE="$HOME/tools/riscv64-linux-musl-cross/bin/riscv64-linux-musl-"
+
+git -c http.version=HTTP/1.1 clone --branch 1_37_0 --depth 1 \
+    https://git.busybox.net/busybox "$BUSYBOX_DIR"
+
+curl -L --fail \
+    https://musl.cc/riscv64-linux-musl-cross.tgz \
+    -o /tmp/riscv64-linux-musl-cross.tgz
+echo "db0bc413bd4a93f2012cc74b9ba0c4af29d8bc18b88e9c61998738ccb918604b  /tmp/riscv64-linux-musl-cross.tgz" \
+    | sha256sum -c -
+tar -xzf /tmp/riscv64-linux-musl-cross.tgz -C "$HOME/tools"
+
+cargo test --release --test linux_boot \
+    linux_userspace_interacts_over_the_uart -- --ignored --nocapture
+```
+
+`BUSYBOX_DIR` must contain the pinned `1_37_0` tag, and
+`BUSYBOX_CROSS_COMPILE` must name a RISC-V Linux musl compiler prefix. The
+gate pins BusyBox's C flags to RV64GC so the resulting executable stays within
+this simulator's implemented ISA. A musl toolchain is required because Ubuntu's
+cross-glibc static objects contain RVV instructions even when application code
+is compiled without V.
+The gate boots both the custom `help`/`echo`/`exit` PID 1 and BusyBox through
+piped stdin, checking UART input, live output, shell command execution, and
+clean poweroff.
 
 ## Development tooling
 

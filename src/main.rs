@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use riscv_simulator_in_rust::boot;
 use riscv_simulator_in_rust::bus::{Bus, MemoryType};
 use riscv_simulator_in_rust::cli::{self, Command, Options, ProgramInput, USAGE};
+use riscv_simulator_in_rust::console::{InputStatus, InteractiveConsole};
 use riscv_simulator_in_rust::cpu::{A0, A1, ABI_NAMES, Cpu, FPR_COUNT};
 use riscv_simulator_in_rust::elf::{ElfImage, is_elf};
 use riscv_simulator_in_rust::linux::LinuxImage;
@@ -20,6 +21,9 @@ const EXIT_USAGE: u8 = 2;
 
 /// Exit code used when a platform reports exit without a status.
 const EXIT_DEVICE_FAILURE: u8 = 1;
+
+/// Guest instructions executed between host console polls.
+const CONSOLE_POLL_INTERVAL_STEPS: u64 = 256;
 
 /// Number of defined IEEE exception flags in `fcsr`.
 const FFLAGS_BITS: u32 = 5;
@@ -185,8 +189,35 @@ fn run(options: &Options) -> ExitCode {
     };
     machine.cpu_mut().set_pc(entry);
 
-    let mut steps = 0;
+    let mut console = if options.interactive {
+        match InteractiveConsole::new() {
+            Ok(console) => Some(console),
+            Err(error) => {
+                eprintln!("cannot start interactive console: {error}");
+                return ExitCode::from(EXIT_DEVICE_FAILURE);
+            }
+        }
+    } else {
+        None
+    };
+    let mut steps: u64 = 0;
+    let mut console_exit_requested = false;
     loop {
+        if steps.is_multiple_of(CONSOLE_POLL_INTERVAL_STEPS)
+            && let Some(console) = &mut console
+        {
+            match console.service(machine.bus_mut()) {
+                Ok(InputStatus::Continue) => {}
+                Ok(InputStatus::ExitRequested) => {
+                    console_exit_requested = true;
+                    break;
+                }
+                Err(error) => {
+                    eprintln!("interactive console error: {error}");
+                    return ExitCode::from(EXIT_DEVICE_FAILURE);
+                }
+            }
+        }
         machine.step(StepOptions {
             trace: options.trace,
         });
@@ -197,6 +228,22 @@ fn run(options: &Options) -> ExitCode {
         if machine.exit_code().is_some() {
             break;
         }
+    }
+
+    if let Some(console) = &mut console {
+        if let Err(error) = console.finish(machine.bus_mut()) {
+            eprintln!("interactive console error: {error}");
+            return ExitCode::from(EXIT_DEVICE_FAILURE);
+        }
+        return ExitCode::from(if console_exit_requested {
+            0
+        } else {
+            machine.exit_code().unwrap_or(if machine.halted() {
+                0
+            } else {
+                EXIT_DEVICE_FAILURE
+            })
+        });
     }
 
     let _ = std::io::stdout().write_all(&machine.bus_mut().take_console_output());

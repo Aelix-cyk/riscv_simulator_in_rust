@@ -1,0 +1,4 @@
+#!/bin/sh
+
+echo "ARVSR-BUSYBOX-READY"
+exec /bin/sh -i

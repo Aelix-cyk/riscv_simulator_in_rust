@@ -42,7 +42,9 @@ const UART_IER_OFFSET: u64 = 1;
 const UART_IIR_OFFSET: u64 = 2;
 const UART_LSR_OFFSET: u64 = 5;
 const UART_INTERRUPT_ENABLE_RECEIVE: u8 = 1;
+const UART_INTERRUPT_ENABLE_TRANSMIT_HOLDING_EMPTY: u8 = 1 << 1;
 const UART_INTERRUPT_ID_RECEIVE: u8 = 0x04;
+const UART_INTERRUPT_ID_TRANSMIT_HOLDING_EMPTY: u8 = 0x02;
 const UART_INTERRUPT_ID_NONE: u8 = 0x01;
 const UART_LINE_STATUS_DATA_READY: u8 = 0x01;
 const UART_LINE_STATUS_TRANSMIT_HOLDING_EMPTY: u8 = 0x20;
@@ -370,15 +372,25 @@ struct Uart {
 
 impl Uart {
     fn interrupt_pending(&self) -> bool {
+        self.receive_interrupt_pending() || self.transmit_interrupt_pending()
+    }
+
+    fn receive_interrupt_pending(&self) -> bool {
         self.interrupt_enable & UART_INTERRUPT_ENABLE_RECEIVE != 0 && !self.receive.is_empty()
+    }
+
+    fn transmit_interrupt_pending(&self) -> bool {
+        self.interrupt_enable & UART_INTERRUPT_ENABLE_TRANSMIT_HOLDING_EMPTY != 0
     }
 
     fn read_byte(&mut self, offset: u64) -> Result<u8, Trap> {
         match offset {
             UART_RBR_OFFSET => Ok(self.receive.pop_front().unwrap_or(0)),
             UART_IER_OFFSET => Ok(self.interrupt_enable),
-            UART_IIR_OFFSET => Ok(if self.interrupt_pending() {
+            UART_IIR_OFFSET => Ok(if self.receive_interrupt_pending() {
                 UART_INTERRUPT_ID_RECEIVE
+            } else if self.transmit_interrupt_pending() {
+                UART_INTERRUPT_ID_TRANSMIT_HOLDING_EMPTY
             } else {
                 UART_INTERRUPT_ID_NONE
             }),
@@ -398,7 +410,9 @@ impl Uart {
         match offset {
             UART_RBR_OFFSET => self.output.push(value),
             UART_IER_OFFSET => {
-                self.interrupt_enable = value & UART_INTERRUPT_ENABLE_RECEIVE;
+                self.interrupt_enable = value
+                    & (UART_INTERRUPT_ENABLE_RECEIVE
+                        | UART_INTERRUPT_ENABLE_TRANSMIT_HOLDING_EMPTY);
             }
             offset if offset < UART_SIZE => {}
             _ => return Err(Trap::AccessFault),
@@ -707,6 +721,24 @@ mod tests {
         assert!(platform.uart.interrupt_pending());
         assert_eq!(platform.read_u8(UART_BASE, MemoryType::Io).unwrap(), b'B');
         assert_eq!(platform.take_console_output(), b"A");
+    }
+
+    #[test]
+    fn uart_reports_transmit_holding_empty_interrupts() {
+        let mut platform = platform();
+        platform
+            .write_u8(
+                UART_BASE + UART_IER_OFFSET,
+                UART_INTERRUPT_ENABLE_TRANSMIT_HOLDING_EMPTY,
+                MemoryType::Io,
+            )
+            .unwrap();
+
+        assert!(platform.uart.interrupt_pending());
+        assert_eq!(
+            platform.read_u8(UART_BASE + UART_IIR_OFFSET, MemoryType::Io),
+            Ok(UART_INTERRUPT_ID_TRANSMIT_HOLDING_EMPTY)
+        );
     }
 
     #[test]
